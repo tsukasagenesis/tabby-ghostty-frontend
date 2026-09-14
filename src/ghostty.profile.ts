@@ -20,6 +20,14 @@ export class GhosttyProfileProvider extends ProfileProvider<GhosttyProfile> {
     id = 'ghostty'
     name = 'Ghostty'
     supportsQuickConnect = false
+    configDefaults = {
+        options: {
+            command: null,
+            args: [],
+            cwd: null,
+            env: {},
+        },
+    }
 
     async getBuiltinProfiles (): Promise<PartialProfile<GhosttyProfile>[]> {
         return [

@@ -1,5 +1,5 @@
 import { Component, Injector, ElementRef, ViewChild, Input, HostBinding, OnInit, OnDestroy } from '@angular/core'
-import { BaseTabComponent, ConfigService, GetRecoveryTokenOptions, RecoveryToken, LogService } from 'tabby-core'
+import { BaseTabComponent, GetRecoveryTokenOptions, RecoveryToken, LogService } from 'tabby-core'
 import { GhosttySession, GhosttySessionOptions } from './ghostty.session'
 
 /**
@@ -41,16 +41,16 @@ export class GhosttyTabComponent extends BaseTabComponent implements OnInit, OnD
     private fitAddon: any = null
     private resizeObserver: ResizeObserver | null = null
     private logger: any
+    private disposed = false
 
     constructor (
         injector: Injector,
-        config: ConfigService,
         log: LogService,
     ) {
         super(injector)
+        // `this.config` is set by BaseTabComponent from the injector.
         this.logger = log.create('ghostty')
         this.setTitle('Ghostty')
-        void config
     }
 
     async ngOnInit (): Promise<void> {
@@ -149,10 +149,17 @@ export class GhosttyTabComponent extends BaseTabComponent implements OnInit, OnD
     }
 
     ngOnDestroy (): void {
-        this.destroy()
+        // BaseTabComponent.ngOnDestroy() calls destroy() and then
+        // BaseComponent.ngOnDestroy(), which cancels subscriptions.
+        super.ngOnDestroy()
     }
 
-    destroy (): void {
+    destroy (skipDestroyedEvent = false): void {
+        if (this.disposed) {
+            return
+        }
+        this.disposed = true
+
         this.resizeObserver?.disconnect()
         this.resizeObserver = null
 
@@ -166,6 +173,6 @@ export class GhosttyTabComponent extends BaseTabComponent implements OnInit, OnD
         void this.session?.destroy()
         this.session = null
 
-        super.destroy()
+        super.destroy(skipDestroyedEvent)
     }
 }
