@@ -63,7 +63,7 @@ export class GhosttyFrontend extends Frontend {
         this.element = host
 
         const config = this.configService.store
-        const gh = config.ghostty ?? {}
+        const gh = config?.ghostty ?? {}
         this.configuredFontSize = config.terminal.fontSize
         this.copyOnSelect = config.terminal.copyOnSelect
 
@@ -185,7 +185,7 @@ export class GhosttyFrontend extends Frontend {
      * take the whole tab down. Fall back instead.
      */
     private debug (...args: any[]): void {
-        if (this.configService.store.ghostty?.debugLogging) {
+        if (this.configService.store?.ghostty?.debugLogging) {
             console.log('[ghostty]', ...args)
         }
     }
@@ -237,7 +237,7 @@ export class GhosttyFrontend extends Frontend {
      * buffering entirely; anything unparseable falls back to 1 MiB.
      */
     private get writeBufferLimit (): number {
-        const mb = Number(this.configService.store.ghostty?.writeBufferLimitMB)
+        const mb = Number(this.configService.store?.ghostty?.writeBufferLimitMB)
         if (!Number.isFinite(mb) || mb < 0) {
             return 1024 * 1024
         }
@@ -330,7 +330,7 @@ export class GhosttyFrontend extends Frontend {
             return
         }
         const config = this.configService.store
-        const gh = config.ghostty ?? {}
+        const gh = config?.ghostty ?? {}
         this.configuredFontSize = config.terminal.fontSize
         this.copyOnSelect = config.terminal.copyOnSelect
 
@@ -348,7 +348,7 @@ export class GhosttyFrontend extends Frontend {
             this.terminal.options.cursorBlink = config.terminal.cursorBlink
             this.terminal.options.scrollback = config.terminal.scrollbackLines
 
-            const gh = config.ghostty ?? {}
+            const gh = config?.ghostty ?? {}
             this.terminal.options.smoothScrollDuration = gh.smoothScrollDuration ?? 100
             this.terminal.options.convertEol = !!gh.convertEol
             this.terminal.options.disableStdin = !!gh.disableStdin

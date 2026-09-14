@@ -44,7 +44,9 @@ export class GhosttyFrontendPatch {
     }
 
     get enabled (): boolean {
-        return !!this.config.store.ghostty?.replaceTerminalFrontend
+        // `config.store` is undefined until ConfigService.load() resolves, so
+        // the guard has to be on `store` itself, not just on `ghostty`.
+        return !!this.config.store?.ghostty?.replaceTerminalFrontend
     }
 
     /**
@@ -113,21 +115,27 @@ export class GhosttyFrontendPatch {
         this.applied = true
         this.logger.info('Patched BaseTerminalTabComponent.ngOnInit')
 
-        if (this.config.store.ghostty?.preloadEngine) {
+        // ConfigService populates `store` asynchronously: its constructor does
+        // `setTimeout(() => this.init())` and `init()` awaits `load()`, which is
+        // what assigns `this.store`. This method runs from the plugin's NgModule
+        // constructor, long before that, so the store must not be touched here -
+        // wait for `ready$` instead.
+        this.config.ready$.subscribe(() => {
+            if (!this.config.store?.ghostty?.preloadEngine) {
+                return
+            }
             // Loading the WASM module up front means the first terminal has
             // nothing to buffer while it waits for the engine.
-            setTimeout(() => {
-                try {
-                    // eslint-disable-next-line @typescript-eslint/no-var-requires
-                    void require('ghostty-web').init().then(
-                        () => this.logger.info('Ghostty WASM engine preloaded'),
-                        (error: any) => this.logger.warn('Ghostty WASM preload failed:', error),
-                    )
-                } catch (error) {
-                    this.logger.warn('Ghostty WASM preload failed:', error)
-                }
-            }, 0)
-        }
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-var-requires
+                void require('ghostty-web').init().then(
+                    () => this.logger.info('Ghostty WASM engine preloaded'),
+                    (error: any) => this.logger.warn('Ghostty WASM preload failed:', error),
+                )
+            } catch (error) {
+                this.logger.warn('Ghostty WASM preload failed:', error)
+            }
+        })
     }
 
     /** Restores Tabby's original method. */
