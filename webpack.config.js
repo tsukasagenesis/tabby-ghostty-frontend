@@ -28,11 +28,13 @@ module.exports = {
   externals: [
     '@angular/common',
     '@angular/core',
+    '@angular/forms',
     '@angular/platform-browser',
     'rxjs',
     'rxjs/operators',
     'tabby-core',
     'tabby-terminal',
+    'tabby-settings',
     'electron',
     /^electron\/.*$/,
   ],
