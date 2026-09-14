@@ -9,6 +9,10 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // Off by default: this replaces the terminal engine in every tab
             // by patching a Tabby internal, so it must be opted into.
             replaceTerminalFrontend: false,
+            // Output arriving before the WASM engine has loaded is buffered
+            // and replayed once the terminal opens. Capped so a tab that never
+            // finishes attaching cannot grow without bound.
+            writeBufferLimitMB: 1,
         },
     }
 
@@ -31,6 +35,25 @@ export class GhosttyConfigProvider extends ConfigProvider {
                 <toggle
                     [(ngModel)]="config.store.ghostty.replaceTerminalFrontend"
                     (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Startup output buffer</div>
+                    <div class="description">
+                        Megabytes of terminal output held while Ghostty's WASM engine loads,
+                        replayed once the terminal opens. Raise it if the start of a session's
+                        output is missing on slow machines; 0 disables buffering.
+                    </div>
+                </div>
+                <input
+                    type="number"
+                    class="form-control"
+                    min="0"
+                    max="64"
+                    step="0.5"
+                    [(ngModel)]="config.store.ghostty.writeBufferLimitMB"
+                    (ngModelChange)="config.save()">
             </div>
 
             <div class="alert alert-info">

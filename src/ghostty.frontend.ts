@@ -37,7 +37,6 @@ export class GhosttyFrontend extends Frontend {
     private opened = false
     private writeBuffer: string[] = []
     private writeBufferBytes = 0
-    private readonly WRITE_BUFFER_LIMIT = 1024 * 1024
 
     private configService: ConfigService
     private platformService: PlatformService
@@ -180,6 +179,19 @@ export class GhosttyFrontend extends Frontend {
     }
 
     /**
+     * Cap for the pre-open write buffer, from
+     * Settings -> Ghostty -> "Startup output buffer". A value of 0 disables
+     * buffering entirely; anything unparseable falls back to 1 MiB.
+     */
+    private get writeBufferLimit (): number {
+        const mb = Number(this.configService.store.ghostty?.writeBufferLimitMB)
+        if (!Number.isFinite(mb) || mb < 0) {
+            return 1024 * 1024
+        }
+        return Math.round(mb * 1024 * 1024)
+    }
+
+    /**
      * Must never throw and never reject.
      *
      * Tabby serialises terminal output through a single promise chain:
@@ -195,7 +207,7 @@ export class GhosttyFrontend extends Frontend {
      */
     async write (data: string): Promise<void> {
         if (!this.terminal || !this.opened) {
-            if (this.writeBufferBytes < this.WRITE_BUFFER_LIMIT) {
+            if (this.writeBufferBytes < this.writeBufferLimit) {
                 this.writeBuffer.push(data)
                 this.writeBufferBytes += data.length
             }
