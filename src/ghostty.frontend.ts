@@ -230,20 +230,24 @@ export class GhosttyFrontend extends Frontend {
      * transparent so its themed background shows through, but ghostty-web
      * relies on this colour as its eraser, so it can never be transparent.
      */
-    private backgroundColor (scheme: any, config: any): string {
+    private backgroundColor (scheme: any, _config: any): string {
         const opaque = (c: string | undefined | null): string | null => {
             if (!c) return null
-            // Reject fully-transparent and 8-digit-with-zero-alpha colours.
-            if (/^#[0-9a-f]{8}$/i.test(c) && c.slice(7).toLowerCase() === '00') return null
-            if (/^#0{8}$/.test(c)) return null
-            return c
+            const v = String(c).trim()
+            // Reject anything with a zero alpha channel (#rrggbb00 / #rgba form).
+            if (/^#[0-9a-f]{8}$/i.test(v) && v.slice(7).toLowerCase() === '00') return null
+            if (/^#[0-9a-f]{4}$/i.test(v) && v[4] === '0') return null
+            if (/^(transparent|rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0(\.0+)?\s*\))$/i.test(v)) return null
+            return v
         }
-        if (config.terminal.background === 'colorScheme') {
-            const c = opaque(scheme?.background)
-            if (c) return c
-        }
-        return opaque(this.themes.findCurrentTheme()?.terminalBackground)
-            ?? opaque(scheme?.background)
+
+        // The colour scheme's background is what belongs behind terminal text -
+        // it is the only background XTermFrontend ever paints. The app theme's
+        // `terminalBackground` is the *window* chrome colour and is light
+        // (#f7f1e0) on light themes, which is why preferring it turned Ghostty
+        // terminals white. Use it only if the scheme has no usable background.
+        return opaque(scheme?.background)
+            ?? opaque(this.themes.findCurrentTheme()?.terminalBackground)
             ?? '#000000'
     }
 
