@@ -104,6 +104,21 @@ export class GhosttyFrontend extends Frontend {
         this.resizeObserver = new ResizeObserver(() => this.fitAddon?.fit?.())
         this.resizeObserver.observe(host)
 
+        // Tabby's terminal template is `<div class="content" #content
+        // [style.opacity]="frontendIsReady ? 1 : 0">`, and `frontendIsReady`
+        // is only set once `resize$` has emitted at least once:
+        //
+        //     this.frontend.resize$.pipe(first()).subscribe(({columns, rows}) => {
+        //         this.frontendReady.next(); this.frontendReady.complete()
+        //     })
+        //
+        // ghostty-web's `resize()` early-returns when the size is unchanged,
+        // and `FitAddon.fit()` silently does nothing when it cannot measure
+        // the container, so relying on `onResize` alone can leave `resize$`
+        // silent forever - the session runs but the terminal stays at
+        // opacity 0. Always emit the current size here.
+        this.resize.next({ columns: this.terminal.cols, rows: this.terminal.rows })
+
         this.ready.next()
         this.ready.complete()
     }
