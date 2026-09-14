@@ -75,10 +75,9 @@ export class GhosttyFrontend extends Frontend {
             cursorBlink: config.terminal.cursorBlink,
             // The key is `scrollbackLines` (default 25000), not `scrollback`.
             scrollback: config.terminal.scrollbackLines,
-            // Tabby renders the terminal over its own themed background, and
-            // makeTheme() returns a transparent background unless the user
-            // picked "colorScheme"; without this the canvas paints opaque.
-            allowTransparency: true,
+            // The background is deliberately opaque (see backgroundColor()),
+            // so transparency compositing must stay off.
+            allowTransparency: false,
             theme: this.makeTheme(profile),
             // Ghostty-specific options (Settings -> Ghostty -> Engine).
             // ghostty-web reads all three live from its options Proxy, so
@@ -110,8 +109,23 @@ export class GhosttyFrontend extends Frontend {
         this.fitAddon = new FitAddon()
         this.terminal.loadAddon(this.fitAddon)
 
+        // Neither XTermFrontend.attach() nor Frontend.detach() clears the host,
+        // and ghostty-web's open() only appendChild()s its canvas. If anything
+        // else has already rendered into this element - a stray xterm instance,
+        // or a previous attach on the same host - both renderings end up stacked
+        // in the same box. Log what was there and start from a clean container.
+        if (host.childElementCount > 0) {
+            const existing = Array.from(host.children).map(
+                el => el.tagName.toLowerCase() + (el.className ? '.' + String(el.className).split(' ').join('.') : ''),
+            )
+            console.warn('[ghostty] host was not empty before open(), clearing:', existing)
+            host.innerHTML = ''
+        }
+
         this.terminal.open(host)
         this.opened = true
+        this.debug('open() done; host children:',
+            Array.from(host.children).map(el => el.tagName.toLowerCase()).join(','))
 
         // Flush anything the session emitted while the WASM engine was still
         // loading. Without this the SSH banner and login output are lost.
@@ -161,6 +175,13 @@ export class GhosttyFrontend extends Frontend {
     detach (host: HTMLElement): void {
         this.resizeObserver?.disconnect()
         this.resizeObserver = undefined
+        // Base Frontend.detach() is a no-op and leaves our canvas in the host;
+        // remove it so a later attach cannot stack a second rendering.
+        try {
+            host.innerHTML = ''
+        } catch {
+            // Host may already be gone.
+        }
         super.detach(host)
     }
 
@@ -204,6 +225,28 @@ export class GhosttyFrontend extends Frontend {
         return ({ beam: 'bar' }[cursor] ?? cursor) as 'block' | 'underline' | 'bar'
     }
 
+    /**
+     * Resolve an OPAQUE background. Tabby normally lets the terminal be
+     * transparent so its themed background shows through, but ghostty-web
+     * relies on this colour as its eraser, so it can never be transparent.
+     */
+    private backgroundColor (scheme: any, config: any): string {
+        const opaque = (c: string | undefined | null): string | null => {
+            if (!c) return null
+            // Reject fully-transparent and 8-digit-with-zero-alpha colours.
+            if (/^#[0-9a-f]{8}$/i.test(c) && c.slice(7).toLowerCase() === '00') return null
+            if (/^#0{8}$/.test(c)) return null
+            return c
+        }
+        if (config.terminal.background === 'colorScheme') {
+            const c = opaque(scheme?.background)
+            if (c) return c
+        }
+        return opaque(this.themes.findCurrentTheme()?.terminalBackground)
+            ?? opaque(scheme?.background)
+            ?? '#000000'
+    }
+
     private makeTheme (profile: BaseTerminalProfile): any {
         const config = this.configService.store
         const scheme = profile.terminalColorScheme ?? config.terminal.colorScheme
@@ -217,9 +260,14 @@ export class GhosttyFrontend extends Frontend {
             // is only painted when the user asked for it and the app theme does
             // not already follow the color scheme. Otherwise stay transparent
             // so Tabby's themed background shows through.
-            background: !this.themes.findCurrentTheme().followsColorScheme && config.terminal.background === 'colorScheme'
-                ? scheme.background
-                : '#00000000',
+            // MUST be opaque. ghostty-web has no clearRect: the only thing that
+            // erases the canvas is `fillStyle = theme.background; fillRect(...)`
+            // in renderLine()/resize()/clear(). A transparent background paints
+            // nothing, so every repaint composites over the previous frame and
+            // old glyphs are never wiped - text ends up stacked on itself.
+            // XTermFrontend can use '#00000000' because xterm clears properly;
+            // here we fall back to the theme's terminal background instead.
+            background: this.backgroundColor(scheme, config),
             cursor: scheme.cursor,
             cursorAccent: scheme.cursorAccent ?? undefined,
             selectionBackground: scheme.selection ?? '#88888888',
