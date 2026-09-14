@@ -15,7 +15,7 @@ export interface GhosttyProfile extends Profile {
     options: GhosttySessionOptions
 }
 
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class GhosttyProfileProvider extends ProfileProvider<GhosttyProfile> {
     id = 'ghostty'
     name = 'Ghostty'
@@ -48,7 +48,7 @@ export class GhosttyProfileProvider extends ProfileProvider<GhosttyProfile> {
     }
 }
 
-@Injectable()
+@Injectable({ providedIn: 'root' })
 export class GhosttyTabRecoveryProvider extends TabRecoveryProvider<GhosttyTabComponent> {
     async applicableTo (recoveryToken: RecoveryToken): Promise<boolean> {
         return recoveryToken.type === 'app:ghostty-tab'
