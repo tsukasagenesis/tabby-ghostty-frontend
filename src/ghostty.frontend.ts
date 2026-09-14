@@ -63,6 +63,7 @@ export class GhosttyFrontend extends Frontend {
         this.element = host
 
         const config = this.configService.store
+        const gh = config.ghostty ?? {}
         this.configuredFontSize = config.terminal.fontSize
         this.copyOnSelect = config.terminal.copyOnSelect
 
@@ -79,6 +80,12 @@ export class GhosttyFrontend extends Frontend {
             // picked "colorScheme"; without this the canvas paints opaque.
             allowTransparency: true,
             theme: this.makeTheme(profile),
+            // Ghostty-specific options (Settings -> Ghostty -> Engine).
+            // ghostty-web reads all three live from its options Proxy, so
+            // configure() can update them without reopening the tab.
+            smoothScrollDuration: gh.smoothScrollDuration ?? 100,
+            convertEol: !!gh.convertEol,
+            disableStdin: !!gh.disableStdin,
         })
 
         // Feed Tabby's Subjects exactly as XTermFrontend does.
@@ -143,6 +150,8 @@ export class GhosttyFrontend extends Frontend {
         // the container, so relying on `onResize` alone can leave `resize$`
         // silent forever - the session runs but the terminal stays at
         // opacity 0. Always emit the current size here.
+        this.debug('attached', this.terminal.cols + 'x' + this.terminal.rows,
+            'replayed', buffered.length, 'buffered chunk(s)')
         this.resize.next({ columns: this.terminal.cols, rows: this.terminal.rows })
 
         this.ready.next()
@@ -175,6 +184,12 @@ export class GhosttyFrontend extends Frontend {
      * config file, so if it is ever absent this would throw inside attach() and
      * take the whole tab down. Fall back instead.
      */
+    private debug (...args: any[]): void {
+        if (this.configService.store.ghostty?.debugLogging) {
+            console.log('[ghostty]', ...args)
+        }
+    }
+
     private get fontFamily (): string {
         try {
             return getCSSFontFamily(this.configService.store)
@@ -315,6 +330,7 @@ export class GhosttyFrontend extends Frontend {
             return
         }
         const config = this.configService.store
+        const gh = config.ghostty ?? {}
         this.configuredFontSize = config.terminal.fontSize
         this.copyOnSelect = config.terminal.copyOnSelect
 
@@ -331,6 +347,11 @@ export class GhosttyFrontend extends Frontend {
             this.terminal.options.cursorStyle = this.cursorStyle
             this.terminal.options.cursorBlink = config.terminal.cursorBlink
             this.terminal.options.scrollback = config.terminal.scrollbackLines
+
+            const gh = config.ghostty ?? {}
+            this.terminal.options.smoothScrollDuration = gh.smoothScrollDuration ?? 100
+            this.terminal.options.convertEol = !!gh.convertEol
+            this.terminal.options.disableStdin = !!gh.disableStdin
         }
         if (this.opened) {
             this.fitAddon?.fit?.()

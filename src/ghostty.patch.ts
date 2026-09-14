@@ -112,6 +112,22 @@ export class GhosttyFrontendPatch {
 
         this.applied = true
         this.logger.info('Patched BaseTerminalTabComponent.ngOnInit')
+
+        if (this.config.store.ghostty?.preloadEngine) {
+            // Loading the WASM module up front means the first terminal has
+            // nothing to buffer while it waits for the engine.
+            setTimeout(() => {
+                try {
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    void require('ghostty-web').init().then(
+                        () => this.logger.info('Ghostty WASM engine preloaded'),
+                        (error: any) => this.logger.warn('Ghostty WASM preload failed:', error),
+                    )
+                } catch (error) {
+                    this.logger.warn('Ghostty WASM preload failed:', error)
+                }
+            }, 0)
+        }
     }
 
     /** Restores Tabby's original method. */
