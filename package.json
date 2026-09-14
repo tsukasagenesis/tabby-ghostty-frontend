@@ -16,9 +16,6 @@
   },
   "author": "Theo Bousquet",
   "license": "MIT",
-  "dependencies": {
-    "ghostty-web": "^0.4.0"
-  },
   "devDependencies": {
     "@angular/common": "17.3.5",
     "@angular/core": "17.3.5",
@@ -28,7 +25,8 @@
     "ts-loader": "^9.5.1",
     "typescript": "^5.4.5",
     "webpack": "^5.91.0",
-    "webpack-cli": "^5.1.4"
+    "webpack-cli": "^5.1.4",
+    "ghostty-web": "^0.4.0"
   },
   "peerDependencies": {
     "@angular/common": "17.3.5",
