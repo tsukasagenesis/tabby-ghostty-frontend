@@ -69,7 +69,7 @@ export class GhosttyFrontend extends Frontend {
         this.terminal = new Terminal({
             fontSize: this.configuredFontSize,
             // Tabby composes font + fallbackFont + monospace fallbacks.
-            fontFamily: getCSSFontFamily(config),
+            fontFamily: this.fontFamily,
             cursorStyle: this.cursorStyle,
             cursorBlink: config.terminal.cursorBlink,
             // The key is `scrollbackLines` (default 25000), not `scrollback`.
@@ -167,6 +167,20 @@ export class GhosttyFrontend extends Frontend {
             // Disposing a terminal that never opened throws; harmless.
         }
         this.terminal = null
+    }
+
+    /**
+     * `getCSSFontFamily()` does `config.terminal.font.split(',')` with no null
+     * guard. `terminal.font` comes from platformDefaults rather than the user's
+     * config file, so if it is ever absent this would throw inside attach() and
+     * take the whole tab down. Fall back instead.
+     */
+    private get fontFamily (): string {
+        try {
+            return getCSSFontFamily(this.configService.store)
+        } catch {
+            return '"monospace-fallback", "monospace"'
+        }
     }
 
     /** Tabby calls it `beam`; ghostty-web (like xterm) calls it `bar`. */
@@ -313,7 +327,7 @@ export class GhosttyFrontend extends Frontend {
         // theme is applied once at construction.
         if (this.terminal.options) {
             this.terminal.options.fontSize = this.configuredFontSize * Math.pow(1.1, this.zoom)
-            this.terminal.options.fontFamily = getCSSFontFamily(config)
+            this.terminal.options.fontFamily = this.fontFamily
             this.terminal.options.cursorStyle = this.cursorStyle
             this.terminal.options.cursorBlink = config.terminal.cursorBlink
             this.terminal.options.scrollback = config.terminal.scrollbackLines
