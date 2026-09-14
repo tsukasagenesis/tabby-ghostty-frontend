@@ -35,6 +35,11 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // getViewport() call instead of one getLine() per row.
             fastRenderer: true,
 
+            // Run-merge background fills and skip painting blank cells.
+            // Stacks on top of fastRenderer; measured ~17 fps -> 60+ fps at
+            // 282x77 in a standalone harness.
+            fastLineRenderer: true,
+
             // Apply backpressure to the session when the terminal falls behind,
             // using the same watermarks as Tabby's xterm frontend.
             flowControl: true,
@@ -158,6 +163,21 @@ export class GhosttyConfigProvider extends ConfigProvider {
                 </div>
                 <toggle
                     [(ngModel)]="config.store.ghostty.fastRenderer"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Fast line rendering</div>
+                    <div class="description">
+                        Draws each row's background as one fill per colour run instead of one
+                        per cell, and skips painting blank cells that carry no underline or
+                        link. Decorations, wide CJK characters and text selection all fall back
+                        to the stock path. Turn off if a terminal ever paints incorrectly.
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.fastLineRenderer"
                     (ngModelChange)="config.save()"></toggle>
             </div>
 

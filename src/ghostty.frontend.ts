@@ -79,6 +79,7 @@ export class GhosttyFrontend extends Frontend {
             ghosttyWeb,
             () => this.configService.store?.ghostty?.fastRenderer !== false,
             (...args: any[]) => this.debug(...args),
+            () => this.configService.store?.ghostty?.fastLineRenderer !== false,
         )
 
         this.element = host
