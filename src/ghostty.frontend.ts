@@ -35,6 +35,9 @@ export class GhosttyFrontend extends Frontend {
     private zoom = 0
     private configuredFontSize = 14
     private opened = false
+    private writeBuffer: string[] = []
+    private writeBufferBytes = 0
+    private readonly WRITE_BUFFER_LIMIT = 1024 * 1024
 
     private configService: ConfigService
     private platformService: PlatformService
@@ -93,6 +96,19 @@ export class GhosttyFrontend extends Frontend {
         this.terminal.open(host)
         this.opened = true
 
+        // Flush anything the session emitted while the WASM engine was still
+        // loading. Without this the SSH banner and login output are lost.
+        const buffered = this.writeBuffer
+        this.writeBuffer = []
+        this.writeBufferBytes = 0
+        for (const chunk of buffered) {
+            try {
+                this.terminal.write(chunk)
+            } catch {
+                // Ignore: a failed replay must not abort attach().
+            }
+        }
+
         this.fitAddon.fit?.()
 
         host.addEventListener('dragover', (event: DragEvent) => this.dragOver.next(event))
@@ -131,6 +147,9 @@ export class GhosttyFrontend extends Frontend {
 
     destroy (): void {
         super.destroy()
+        this.writeBuffer = []
+        this.writeBufferBytes = 0
+        this.opened = false
         this.resizeObserver?.disconnect()
         try {
             this.terminal?.dispose()
@@ -160,9 +179,35 @@ export class GhosttyFrontend extends Frontend {
         }
     }
 
+    /**
+     * Must never throw and never reject.
+     *
+     * Tabby serialises terminal output through a single promise chain:
+     *
+     *     this.frontendWriteLock = this.frontendWriteLock.then(() =>
+     *         this.withSpinnerPaused(() => this.writeRaw(data)))
+     *
+     * `writeRaw` does not catch, so one rejection poisons that chain and every
+     * later write is silently dropped for the life of the tab. ghostty-web's
+     * `write()` calls `assertOpen()`, which throws until `open()` has run - and
+     * `attach()` cannot call `open()` until the WASM engine has loaded. Output
+     * arriving in that window is buffered here and replayed by `attach()`.
+     */
     async write (data: string): Promise<void> {
-        this.terminal?.write(data)
-        this.contentUpdated.next()
+        if (!this.terminal || !this.opened) {
+            if (this.writeBufferBytes < this.WRITE_BUFFER_LIMIT) {
+                this.writeBuffer.push(data)
+                this.writeBufferBytes += data.length
+            }
+            return
+        }
+        try {
+            this.terminal.write(data)
+            this.contentUpdated.next()
+        } catch (error) {
+            // Swallow: rejecting here would poison Tabby's write lock.
+            console.error('GhosttyFrontend.write failed:', error)
+        }
     }
 
     clear (): void {
