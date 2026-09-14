@@ -31,6 +31,14 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // first terminal has nothing to buffer.
             preloadEngine: true,
 
+            // Serve the renderer's per-frame row reads from a single
+            // getViewport() call instead of one getLine() per row.
+            fastRenderer: true,
+
+            // Apply backpressure to the session when the terminal falls behind,
+            // using the same watermarks as Tabby's xterm frontend.
+            flowControl: true,
+
             // Log frontend lifecycle to the developer console.
             debugLogging: false,
         },
@@ -133,6 +141,38 @@ export class GhosttyConfigProvider extends ConfigProvider {
                 </div>
                 <toggle
                     [(ngModel)]="config.store.ghostty.disableStdin"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Fast renderer</div>
+                    <div class="description">
+                        ghostty-web's renderer fetches the visible grid one row at a time, and
+                        each of those calls re-reads the whole viewport and deep-copies every
+                        cell. At 280&times;80 that is 80 fetches and 22&nbsp;400 clones per frame
+                        &mdash; about 43&nbsp;ms, against a 6.9&nbsp;ms budget at 144&nbsp;Hz.
+                        This serves all rows from a single fetch instead (measured 0.57&nbsp;ms,
+                        roughly 77&times; faster). Turn off if you suspect a rendering glitch.
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.fastRenderer"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Flow control</div>
+                    <div class="description">
+                        Pause the session while the terminal catches up, so a huge
+                        <code>cat</code> cannot outrun the renderer and freeze the UI. Uses the
+                        same watermarks as Tabby's xterm frontend (pause above 10 pending
+                        128&nbsp;KB writes, resume below 5).
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.flowControl"
                     (ngModelChange)="config.save()"></toggle>
             </div>
 

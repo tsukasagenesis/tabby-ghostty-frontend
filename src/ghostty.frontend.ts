@@ -1,6 +1,7 @@
 import { Injector } from '@angular/core'
 import { ConfigService, PlatformService, ThemesService, getCSSFontFamily } from 'tabby-core'
 import { Frontend, BaseTerminalProfile } from 'tabby-terminal'
+import { applyRenderPatch } from './ghostty.renderpatch'
 
 // `SearchOptions` / `SearchState` are declared in tabby-terminal's
 // frontends/frontend.d.ts but are not re-exported from the package root, and
@@ -39,6 +40,17 @@ export class GhosttyFrontend extends Frontend {
     private writeBuffer: string[] = []
     private writeBufferBytes = 0
 
+    // Flow control, mirroring XTermFrontend's FlowControl watermarks. Without
+    // it the PTY outruns the terminal during a large `cat`: Tabby serialises
+    // every chunk through one promise chain, and frames never get to run.
+    private fcBlocked = false
+    private fcPending = 0
+    private fcBytes = 0
+    private fcWaiters: (() => void)[] = []
+    private readonly FC_LOW = 5
+    private readonly FC_HIGH = 10
+    private readonly FC_BYTES = 128 * 1024
+
     private configService: ConfigService
     private platformService: PlatformService
     private themes: ThemesService
@@ -56,9 +68,18 @@ export class GhosttyFrontend extends Frontend {
     }
 
     async attach (host: HTMLElement, profile: BaseTerminalProfile): Promise<void> {
-        const { init, Terminal, FitAddon } = this.ghosttyWeb
+        const ghosttyWeb = this.ghosttyWeb
+        const { init, Terminal, FitAddon } = ghosttyWeb
 
         await init()
+
+        // ~77x fewer WASM calls per frame at 280x80. Reads the setting per
+        // frame, so it can be toggled without reopening the tab.
+        applyRenderPatch(
+            ghosttyWeb,
+            () => this.configService.store?.ghostty?.fastRenderer !== false,
+            (...args: any[]) => this.debug(...args),
+        )
 
         this.element = host
 
@@ -187,6 +208,13 @@ export class GhosttyFrontend extends Frontend {
 
     destroy (): void {
         super.destroy()
+        // Never leave Tabby's write chain awaiting a promise that cannot settle.
+        this.fcBlocked = false
+        const waiters = this.fcWaiters
+        this.fcWaiters = []
+        for (const resume of waiters) {
+            resume()
+        }
         this.writeBuffer = []
         this.writeBufferBytes = 0
         this.opened = false
@@ -318,13 +346,52 @@ export class GhosttyFrontend extends Frontend {
             }
             return
         }
+
+        if (this.flowControlEnabled && this.fcBlocked) {
+            // Park until the terminal has caught up. Tabby awaits this, which
+            // is what applies backpressure to the session.
+            await new Promise<void>(resolve => this.fcWaiters.push(resolve))
+        }
+
         try {
-            this.terminal.write(data)
+            if (!this.flowControlEnabled) {
+                this.terminal.write(data)
+                this.contentUpdated.next()
+                return
+            }
+
+            this.fcBytes += data.length
+            if (this.fcBytes > this.FC_BYTES) {
+                this.fcBytes = 0
+                this.fcPending++
+                if (!this.fcBlocked && this.fcPending > this.FC_HIGH) {
+                    this.fcBlocked = true
+                }
+                // The callback fires on the next animation frame, i.e. once a
+                // frame has actually been painted - the same signal xterm uses.
+                this.terminal.write(data, () => {
+                    this.fcPending--
+                    if (this.fcBlocked && this.fcPending < this.FC_LOW) {
+                        this.fcBlocked = false
+                        const waiters = this.fcWaiters
+                        this.fcWaiters = []
+                        for (const resume of waiters) {
+                            resume()
+                        }
+                    }
+                })
+            } else {
+                this.terminal.write(data)
+            }
             this.contentUpdated.next()
         } catch (error) {
             // Swallow: rejecting here would poison Tabby's write lock.
             console.error('GhosttyFrontend.write failed:', error)
         }
+    }
+
+    private get flowControlEnabled (): boolean {
+        return this.configService.store?.ghostty?.flowControl !== false
     }
 
     clear (): void {
