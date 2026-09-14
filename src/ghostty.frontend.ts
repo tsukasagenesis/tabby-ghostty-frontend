@@ -1,5 +1,5 @@
 import { Injector } from '@angular/core'
-import { ConfigService, PlatformService } from 'tabby-core'
+import { ConfigService, PlatformService, ThemesService, getCSSFontFamily } from 'tabby-core'
 import { Frontend, BaseTerminalProfile } from 'tabby-terminal'
 
 // `SearchOptions` / `SearchState` are declared in tabby-terminal's
@@ -35,16 +35,19 @@ export class GhosttyFrontend extends Frontend {
     private zoom = 0
     private configuredFontSize = 14
     private opened = false
+    private copyOnSelect = false
     private writeBuffer: string[] = []
     private writeBufferBytes = 0
 
     private configService: ConfigService
     private platformService: PlatformService
+    private themes: ThemesService
 
     constructor (injector: Injector) {
         super(injector)
         this.configService = injector.get(ConfigService)
         this.platformService = injector.get(PlatformService)
+        this.themes = injector.get(ThemesService)
     }
 
     private get ghosttyWeb (): any {
@@ -60,13 +63,21 @@ export class GhosttyFrontend extends Frontend {
         this.element = host
 
         const config = this.configService.store
-        this.configuredFontSize = config.terminal.fontSize ?? 14
+        this.configuredFontSize = config.terminal.fontSize
+        this.copyOnSelect = config.terminal.copyOnSelect
 
         this.terminal = new Terminal({
             fontSize: this.configuredFontSize,
-            fontFamily: config.terminal.font ?? 'monospace',
-            cursorBlink: config.terminal.cursorBlink ?? true,
-            scrollback: config.terminal.scrollback ?? 1000,
+            // Tabby composes font + fallbackFont + monospace fallbacks.
+            fontFamily: getCSSFontFamily(config),
+            cursorStyle: this.cursorStyle,
+            cursorBlink: config.terminal.cursorBlink,
+            // The key is `scrollbackLines` (default 25000), not `scrollback`.
+            scrollback: config.terminal.scrollbackLines,
+            // Tabby renders the terminal over its own themed background, and
+            // makeTheme() returns a transparent background unless the user
+            // picked "colorScheme"; without this the canvas paints opaque.
+            allowTransparency: true,
             theme: this.makeTheme(profile),
         })
 
@@ -84,7 +95,7 @@ export class GhosttyFrontend extends Frontend {
             this.bell.next()
         })
         this.terminal.onSelectionChange(() => {
-            if (config.terminal.copyOnSelect && this.getSelection()) {
+            if (this.copyOnSelect && this.getSelection()) {
                 this.copySelection()
             }
         })
@@ -158,18 +169,31 @@ export class GhosttyFrontend extends Frontend {
         this.terminal = null
     }
 
+    /** Tabby calls it `beam`; ghostty-web (like xterm) calls it `bar`. */
+    private get cursorStyle (): 'block' | 'underline' | 'bar' {
+        const cursor = this.configService.store.terminal.cursor
+        return ({ beam: 'bar' }[cursor] ?? cursor) as 'block' | 'underline' | 'bar'
+    }
+
     private makeTheme (profile: BaseTerminalProfile): any {
-        const scheme = profile.terminalColorScheme ?? this.configService.store.terminal?.colorScheme
+        const config = this.configService.store
+        const scheme = profile.terminalColorScheme ?? config.terminal.colorScheme
         if (!scheme?.colors) {
             return undefined
         }
         const c = scheme.colors
         return {
             foreground: scheme.foreground,
-            background: scheme.background,
+            // Same rule as XTermFrontend.configureColors: the scheme background
+            // is only painted when the user asked for it and the app theme does
+            // not already follow the color scheme. Otherwise stay transparent
+            // so Tabby's themed background shows through.
+            background: !this.themes.findCurrentTheme().followsColorScheme && config.terminal.background === 'colorScheme'
+                ? scheme.background
+                : '#00000000',
             cursor: scheme.cursor,
             cursorAccent: scheme.cursorAccent ?? undefined,
-            selectionBackground: scheme.selection ?? undefined,
+            selectionBackground: scheme.selection ?? '#88888888',
             selectionForeground: scheme.selectionForeground ?? undefined,
             black: c[0], red: c[1], green: c[2], yellow: c[3],
             blue: c[4], magenta: c[5], cyan: c[6], white: c[7],
@@ -277,11 +301,22 @@ export class GhosttyFrontend extends Frontend {
             return
         }
         const config = this.configService.store
-        const size = (config.terminal.fontSize ?? 14) * Math.pow(1.1, this.zoom)
+        this.configuredFontSize = config.terminal.fontSize
+        this.copyOnSelect = config.terminal.copyOnSelect
+
+        // ghostty-web re-applies these through an options Proxy
+        // (handleOptionChange): fontSize and fontFamily remeasure and resize
+        // the canvas, cursorStyle/cursorBlink update the renderer.
+        //
+        // `theme` is deliberately NOT reassigned here: ghostty-web logs
+        // "theme changes after open() are not yet fully supported", so the
+        // theme is applied once at construction.
         if (this.terminal.options) {
-            this.terminal.options.fontSize = size
-            this.terminal.options.fontFamily = config.terminal.font ?? 'monospace'
-            this.terminal.options.theme = this.makeTheme(profile)
+            this.terminal.options.fontSize = this.configuredFontSize * Math.pow(1.1, this.zoom)
+            this.terminal.options.fontFamily = getCSSFontFamily(config)
+            this.terminal.options.cursorStyle = this.cursorStyle
+            this.terminal.options.cursorBlink = config.terminal.cursorBlink
+            this.terminal.options.scrollback = config.terminal.scrollbackLines
         }
         if (this.opened) {
             this.fitAddon?.fit?.()

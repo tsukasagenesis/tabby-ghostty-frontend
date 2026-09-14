@@ -82,6 +82,17 @@ export class GhosttyConfigProvider extends ConfigProvider {
                     <strong>Known gaps.</strong>
                     ghostty-web ships no search or serialize addon yet, so the terminal search
                     panel and scrollback restore are inactive in Ghostty-rendered tabs.
+                    <br><br>
+                    These Appearance settings have no equivalent in ghostty-web and are
+                    <em>not</em> applied to Ghostty tabs:
+                    line padding, font weight / bold font weight, font ligatures,
+                    minimum contrast ratio, "draw bold text in bright colors",
+                    word separator, "Alt is Meta", and sixel images.
+                    Font family, font size, cursor style, cursor blink, scrollback lines,
+                    color scheme, background transparency and copy-on-select are applied.
+                    <br><br>
+                    Color scheme changes apply to newly opened tabs: ghostty-web does not
+                    yet support swapping a terminal's theme after it has opened.
                 </div>
             </div>
         </div>
