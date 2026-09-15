@@ -3,6 +3,7 @@ import { ConfigService, LogService, Logger } from 'tabby-core'
 import { BaseTerminalTabComponent } from 'tabby-terminal'
 import { GhosttyFrontend } from './ghostty.frontend'
 import { watchAndStrip } from './ghostty.zmodem'
+import { BUILD_STAMP } from './ghostty.buildstamp'
 
 /**
  * Replaces the terminal frontend in Tabby's own tabs with GhosttyFrontend.
@@ -154,7 +155,7 @@ export class GhosttyFrontendPatch {
         }
 
         this.applied = true
-        this.logger.info('Patched BaseTerminalTabComponent.ngOnInit')
+        this.logger.info('Patched BaseTerminalTabComponent.ngOnInit; build', BUILD_STAMP)
 
         // ConfigService populates `store` asynchronously: its constructor does
         // `setTimeout(() => this.init())` and `init()` awaits `load()`, which is

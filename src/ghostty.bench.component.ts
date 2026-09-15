@@ -1,5 +1,6 @@
 import { Component, Injector, ElementRef, ViewChild, HostBinding, NgZone, ApplicationRef, OnInit, OnDestroy } from '@angular/core'
 import { BaseTabComponent } from 'tabby-core'
+import { BUILD_STAMP } from './ghostty.buildstamp'
 
 /**
  * A rendering benchmark that runs *inside* Tabby's Angular tree.
@@ -52,6 +53,7 @@ interface ProbeResult {
                     {{ running ? 'Running…' : 'Run benchmark' }}
                 </button>
                 <span class="status">{{ status }}</span>
+                <span class="status">build {{ build }}</span>
             </div>
 
             <table class="results" *ngIf="results.length">
@@ -102,6 +104,7 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
 
     @HostBinding('class.ghostty-bench-tab') hostClass = true
 
+    build = BUILD_STAMP
     running = false
     status = 'idle'
     results: ProbeResult[] = []
