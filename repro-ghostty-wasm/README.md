@@ -75,6 +75,34 @@ Same engine, same sizes, one fresh terminal per case:
 So it is neither volume nor repetition in general: it needs *these* bytes,
 *in full*, *twice*.
 
+## A second, separate bug: `scrollback` never reaches the engine
+
+`ITerminalOptions` accepts `scrollback`, but the WASM config struct reads a
+differently-named field:
+
+```js
+i.setUint32(w, C.scrollbackLimit ?? 1e4, !0)   // config written into wasm
+```
+
+Nothing bridges `options.scrollback` to `config.scrollbackLimit`, so the engine
+always runs on the 10,000 default. Measured by running the reproducer at six
+settings and reading `getScrollbackLength()` afterwards:
+
+| `scrollback` passed | scrollback lines retained | result |
+|---|---|---|
+| 0 | 942 | FAULT pass 2 |
+| 100 | 564 | FAULT pass 2 |
+| 1000 | 564 | FAULT pass 2 |
+| 10000 | 564 | FAULT pass 2 |
+| 25000 | 564 | FAULT pass 2 |
+| 100000 | 564 | FAULT pass 2 |
+
+Every value above 0 retains exactly the same 564 lines, so the option is inert.
+
+This is worth fixing on its own, but it is **not** the cause of the crash: the
+fault occurs identically at every setting, at the same 11.38 MB heap size. A
+missing eviction bound would make the fault depend on the bound; it does not.
+
 ## Not explained by any of these
 
 Each tested against the same build, fresh engine, and found clean:
