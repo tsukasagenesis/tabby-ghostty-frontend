@@ -36,9 +36,36 @@ export interface RenderPatchStats {
     frames: number
     fastFrames: number
     lineFastFrames: number
+    /** render() wall time, ms */
+    renderMs: { avg: number, p50: number, p90: number, max: number }
+    /** rows drawn per render() call */
+    rowsPerFrame: number
+    /** gap between consecutive render() calls, ms - reveals the real cadence */
+    frameGapMs: { avg: number, p50: number, p90: number }
 }
 
-const stats: RenderPatchStats = { applied: false, frames: 0, fastFrames: 0, lineFastFrames: 0 }
+const stats: RenderPatchStats = {
+    applied: false, frames: 0, fastFrames: 0, lineFastFrames: 0,
+    renderMs: { avg: 0, p50: 0, p90: 0, max: 0 },
+    rowsPerFrame: 0,
+    frameGapMs: { avg: 0, p50: 0, p90: 0 },
+}
+
+const renderTimes: number[] = []
+const frameGaps: number[] = []
+let lastRenderAt = 0
+
+function summarise (): void {
+    const pct = (a: number[], k: number) => {
+        if (!a.length) return 0
+        const s = [...a].sort((x, y) => x - y)
+        return +s[Math.min(s.length - 1, Math.floor(s.length * k))].toFixed(2)
+    }
+    const avg = (a: number[]) => a.length ? +(a.reduce((x, y) => x + y, 0) / a.length).toFixed(2) : 0
+    stats.renderMs = { avg: avg(renderTimes), p50: pct(renderTimes, 0.5), p90: pct(renderTimes, 0.9), max: pct(renderTimes, 0.999) }
+    stats.frameGapMs = { avg: avg(frameGaps), p50: pct(frameGaps, 0.5), p90: pct(frameGaps, 0.9) }
+    stats.rowsPerFrame = stats.frames ? +(stats.lineFastFrames / stats.frames).toFixed(1) : 0
+}
 
 let originalRender: ((...args: any[]) => void) | null = null
 let originalRenderLine: ((...args: any[]) => void) | null = null
@@ -65,7 +92,8 @@ function rgbCSS (r: number, g: number, b: number): string {
 }
 
 export function getRenderPatchStats (): RenderPatchStats {
-    return { ...stats }
+    summarise()
+    return JSON.parse(JSON.stringify(stats))
 }
 
 /**
@@ -154,7 +182,16 @@ export function applyRenderPatch (
         }
 
         stats.fastFrames++
-        return original.call(this, wrapped, forceAll, viewportY, scrollbackProvider, scrollbarOpacity)
+        const now = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+        if (lastRenderAt) {
+            frameGaps.push(now - lastRenderAt)
+            if (frameGaps.length > 4000) frameGaps.splice(0, 2000)
+        }
+        lastRenderAt = now
+        const out = original.call(this, wrapped, forceAll, viewportY, scrollbackProvider, scrollbarOpacity)
+        renderTimes.push((typeof performance !== 'undefined' ? performance.now() : Date.now()) - now)
+        if (renderTimes.length > 4000) renderTimes.splice(0, 2000)
+        return out
     }
 
     stats.applied = true

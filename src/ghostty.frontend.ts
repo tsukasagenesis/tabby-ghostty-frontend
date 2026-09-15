@@ -1,7 +1,7 @@
 import { Injector } from '@angular/core'
 import { ConfigService, PlatformService, ThemesService, getCSSFontFamily } from 'tabby-core'
 import { Frontend, BaseTerminalProfile } from 'tabby-terminal'
-import { applyRenderPatch } from './ghostty.renderpatch'
+import { applyRenderPatch, getRenderPatchStats } from './ghostty.renderpatch'
 
 // `SearchOptions` / `SearchState` are declared in tabby-terminal's
 // frontends/frontend.d.ts but are not re-exported from the package root, and
@@ -39,6 +39,31 @@ export class GhosttyFrontend extends Frontend {
     private copyOnSelect = false
     private writeBuffer: string[] = []
     private writeBufferBytes = 0
+
+    // Write-path instrumentation: if render() turns out to be cheap, the cost
+    // is here - Tabby serialises every chunk through a promise chain.
+    private wrCount = 0
+    private wrBytes = 0
+    private wrMs = 0
+    private wrMax = 0
+    private wrFirstAt = 0
+
+    // Output coalescing. SSH delivers one russh packet per emitOutput, which
+    // measured ~1.7 KB in practice: 90 MB arrived as 52,969 separate writes,
+    // and throughput sat at 1.2 MB/s while rendering cost only 0.1 ms/frame.
+    //
+    // The engine is not the constraint: ghostty-web sustains 36.1 MB/s at
+    // 1.7 KB chunks versus 37.7 MB/s at 64 KB, so its per-call cost (~2 us)
+    // is irrelevant. The 30x gap is Tabby's per-chunk pipeline - a write-lock
+    // promise hop, the detectProgress regex, OSC buffer scans, five
+    // SessionMiddleware passes and an Angular zone entry, all paid per chunk
+    // regardless of size. Batching to one write per animation frame removes
+    // ~99% of those traversals.
+    private pending: string[] = []
+    private pendingBytes = 0
+    private flushHandle: any = null
+    private coalescedWrites = 0
+    private flushes = 0
 
     // Flow control, mirroring XTermFrontend's FlowControl watermarks. Without
     // it the PTY outruns the terminal during a large `cat`: Tabby serialises
@@ -188,6 +213,73 @@ export class GhosttyFrontend extends Frontend {
         // opacity 0. Always emit the current size here.
         this.debug('attached', this.terminal.cols + 'x' + this.terminal.rows,
             'replayed', buffered.length, 'buffered chunk(s)')
+
+        // Prove whether the render patches are actually live in Tabby. Without
+        // this there is no way to tell a patched renderer from a stock one.
+        setTimeout(() => {
+            const st = getRenderPatchStats()
+            const elapsed = this.wrFirstAt
+                ? ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - this.wrFirstAt) / 1000
+                : 0
+            const report = {
+                ...st,
+                write: {
+                    chunks: this.wrCount,
+                    mb: +(this.wrBytes / 1048576).toFixed(2),
+                    totalMs: +this.wrMs.toFixed(1),
+                    avgMs: this.wrCount ? +(this.wrMs / this.wrCount).toFixed(3) : 0,
+                    maxMs: +this.wrMax.toFixed(2),
+                    mbPerSec: elapsed > 0 ? +((this.wrBytes / 1048576) / elapsed).toFixed(1) : 0,
+                },
+                grid: `${this.terminal?.cols}x${this.terminal?.rows}`,
+                devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : null,
+                flowControl: this.flowControlEnabled,
+                fastRenderer: this.configService.store?.ghostty?.fastRenderer !== false,
+                fastLineRenderer: this.configService.store?.ghostty?.fastLineRenderer !== false,
+                at: new Date().toISOString(),
+            }
+            console.info('[ghostty] render patch status:', JSON.stringify(report))
+            // Devtools is awkward to open in Tabby, so mirror this to a file.
+            try {
+                const req = (globalThis as any).nodeRequire ?? require
+                const fs = req('fs')
+                const os = req('os')
+                fs.writeFileSync(
+                    os.homedir() + '/.config/tabby/ghostty-perf.json',
+                    JSON.stringify(report, null, 2),
+                )
+            } catch {
+                // Non-fatal: the console line above is still emitted.
+            }
+        }, 5000)
+
+        // Keep refreshing while the tab lives, so the file reflects a busy
+        // period rather than the first idle five seconds.
+        const perfTimer = setInterval(() => {
+            const st2 = getRenderPatchStats()
+            try {
+                const req = (globalThis as any).nodeRequire ?? require
+                const fs = req('fs')
+                const os = req('os')
+                const elapsed2 = this.wrFirstAt
+                    ? ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - this.wrFirstAt) / 1000
+                    : 0
+                fs.writeFileSync(os.homedir() + '/.config/tabby/ghostty-perf.json', JSON.stringify({
+                    ...st2,
+                    grid: `${this.terminal?.cols}x${this.terminal?.rows}`,
+                    devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : null,
+                    write: {
+                        chunks: this.wrCount,
+                        mb: +(this.wrBytes / 1048576).toFixed(2),
+                        avgMs: this.wrCount ? +(this.wrMs / this.wrCount).toFixed(3) : 0,
+                        maxMs: +this.wrMax.toFixed(2),
+                        mbPerSec: elapsed2 > 0 ? +((this.wrBytes / 1048576) / elapsed2).toFixed(1) : 0,
+                    },
+                    at: new Date().toISOString(),
+                }, null, 2))
+            } catch { /* non-fatal */ }
+        }, 3000)
+        this.destroyed$.subscribe(() => clearInterval(perfTimer))
         this.resize.next({ columns: this.terminal.cols, rows: this.terminal.rows })
 
         this.ready.next()
@@ -208,6 +300,12 @@ export class GhosttyFrontend extends Frontend {
     }
 
     destroy (): void {
+        if (this.flushHandle !== null) {
+            const cancel = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : clearTimeout
+            cancel(this.flushHandle)
+            this.flushHandle = null
+        }
+        this.flush()
         super.destroy()
         // Never leave Tabby's write chain awaiting a promise that cannot settle.
         this.fcBlocked = false
@@ -325,6 +423,51 @@ export class GhosttyFrontend extends Frontend {
         return Math.round(mb * 1024 * 1024)
     }
 
+    private get coalesceEnabled (): boolean {
+        return this.configService.store?.ghostty?.coalesceOutput !== false
+    }
+
+    /**
+     * Queue a chunk and schedule a flush on the next animation frame.
+     * Painting is already synced to rAF, so batching to the same cadence adds
+     * no latency the user can perceive while removing ~99% of the per-chunk
+     * pipeline cost.
+     */
+    private queue (data: string): void {
+        this.pending.push(data)
+        this.pendingBytes += data.length
+        this.coalescedWrites++
+
+        // Bound the buffer: a burst should not grow without limit between
+        // frames. 4 MB is far above a single frame's worth of PTY output.
+        if (this.pendingBytes >= 4 * 1024 * 1024) {
+            this.flush()
+            return
+        }
+        if (this.flushHandle === null) {
+            const raf = typeof requestAnimationFrame === 'function'
+                ? requestAnimationFrame
+                : (cb: any) => setTimeout(cb, 16)
+            this.flushHandle = raf(() => { this.flushHandle = null; this.flush() })
+        }
+    }
+
+    private flush (): void {
+        if (!this.pending.length) {
+            return
+        }
+        const batch = this.pending.length === 1 ? this.pending[0] : this.pending.join('')
+        this.pending = []
+        this.pendingBytes = 0
+        this.flushes++
+        try {
+            this.terminal?.write(batch)
+            this.contentUpdated.next()
+        } catch (error) {
+            console.error('GhosttyFrontend.flush failed:', error)
+        }
+    }
+
     /**
      * Must never throw and never reject.
      *
@@ -354,10 +497,22 @@ export class GhosttyFrontend extends Frontend {
             await new Promise<void>(resolve => this.fcWaiters.push(resolve))
         }
 
+        const wrStart = (typeof performance !== 'undefined' ? performance.now() : Date.now())
+        if (!this.wrFirstAt) this.wrFirstAt = wrStart
+        this.wrCount++
+        this.wrBytes += data.length
+
         try {
             if (!this.flowControlEnabled) {
-                this.terminal.write(data)
-                this.contentUpdated.next()
+                if (this.coalesceEnabled) {
+                    this.queue(data)
+                } else {
+                    this.terminal.write(data)
+                    this.contentUpdated.next()
+                }
+                const d = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - wrStart
+                this.wrMs += d
+                if (d > this.wrMax) this.wrMax = d
                 return
             }
 

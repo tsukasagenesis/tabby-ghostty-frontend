@@ -35,14 +35,22 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // getViewport() call instead of one getLine() per row.
             fastRenderer: true,
 
+            // Batch session output and write it once per animation frame.
+            // SSH delivers ~1.7 KB per packet; each write pays Tabby's whole
+            // per-chunk pipeline, which capped throughput at 1.2 MB/s while
+            // rendering itself cost only 0.1 ms/frame.
+            coalesceOutput: true,
+
             // Run-merge background fills and skip painting blank cells.
             // Stacks on top of fastRenderer; measured ~17 fps -> 60+ fps at
             // 282x77 in a standalone harness.
             fastLineRenderer: true,
 
             // Apply backpressure to the session when the terminal falls behind,
-            // using the same watermarks as Tabby's xterm frontend.
-            flowControl: true,
+            // using the same watermarks as Tabby's xterm frontend. Off by
+            // default: measurement showed it does not improve smoothness and
+            // it can only ever delay output.
+            flowControl: false,
 
             // Log frontend lifecycle to the developer console.
             debugLogging: false,
@@ -163,6 +171,21 @@ export class GhosttyConfigProvider extends ConfigProvider {
                 </div>
                 <toggle
                     [(ngModel)]="config.store.ghostty.fastRenderer"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Batch output per frame</div>
+                    <div class="description">
+                        SSH delivers output in small packets &mdash; a 90&nbsp;MB dump arrived as
+                        52,969 separate writes, each paying Tabby's full per-chunk cost. This
+                        collects them and writes once per animation frame instead. Painting is
+                        already frame-synced, so nothing is delayed that you could perceive.
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.coalesceOutput"
                     (ngModelChange)="config.save()"></toggle>
             </div>
 
