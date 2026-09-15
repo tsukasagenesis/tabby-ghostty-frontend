@@ -118,6 +118,7 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
     private tickMs = 0
     private restoreTick: (() => void) | null = null
     private engine: any = null
+    private journalProc: any = null
 
     constructor (
         injector: Injector,
@@ -252,6 +253,23 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
             }])
         }
 
+        // F: the same engine, fed REAL journalctl output instead of synthetic
+        // rows. The process is spawned straight from the renderer, so there is
+        // no Tabby session, no middleware stack, and no second tab competing
+        // for the main thread - just the engine and the data. This is a
+        // cleaner isolate than running journalctl in a separate terminal tab.
+        if (engine) {
+            const journal = await this.startJournal()
+            if (journal) {
+                probes.push(['F ghostty + journalctl', () => {
+                    const chunk = journal.take()
+                    if (chunk) {
+                        engine.write(chunk)
+                    }
+                }])
+            }
+        }
+
         for (const [name, work] of probes) {
             if (this.disposed) {
                 return
@@ -270,6 +288,47 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
             this.running = false
             this.status = 'done — run again with a terminal streaming to compare'
         })
+    }
+
+    /**
+     * Spawn `journalctl --no-pager` from the renderer and buffer its output.
+     *
+     * Electron's renderer has Node integration here (the plugin already uses
+     * `require`), so the process can be spawned directly. Output accumulates in
+     * a queue and `take()` drains whatever arrived since the last frame, which
+     * mirrors how a terminal receives PTY data without any of Tabby's pipeline
+     * in between.
+     */
+    private async startJournal (): Promise<{ take: () => string } | null> {
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const { spawn } = require('child_process')
+            const proc = spawn('journalctl', ['--no-pager'], { stdio: ['ignore', 'pipe', 'ignore'] })
+            let queue: string[] = []
+            proc.stdout.setEncoding('utf8')
+            proc.stdout.on('data', (d: string) => {
+                // Bound the queue: if the engine cannot keep up we want to
+                // measure that, not accumulate unbounded memory.
+                if (queue.length < 2000) {
+                    queue.push(d)
+                }
+            })
+            proc.on('error', (e: any) => console.warn('[ghostty-bench] journalctl failed:', e))
+            this.journalProc = proc
+            return {
+                take: () => {
+                    if (!queue.length) {
+                        return ''
+                    }
+                    const out = queue.join('')
+                    queue = []
+                    return out
+                },
+            }
+        } catch (error) {
+            console.warn('[ghostty-bench] could not spawn journalctl:', error)
+            return null
+        }
     }
 
     /**
@@ -322,6 +381,12 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
             // Non-fatal: the patch is idempotent and guarded by a flag.
         }
         this.restoreTick = null
+        try {
+            this.journalProc?.kill?.()
+        } catch {
+            // Already exited.
+        }
+        this.journalProc = null
         try {
             this.engine?.dispose?.()
         } catch {
