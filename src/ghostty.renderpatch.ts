@@ -42,6 +42,10 @@ export interface RenderPatchStats {
     rowsPerFrame: number
     /** gap between consecutive render() calls, ms - reveals the real cadence */
     frameGapMs: { avg: number, p50: number, p90: number }
+    /** frames skipped because nothing visibly changed */
+    idleSkipped: number
+    /** frames that actually painted */
+    painted: number
 }
 
 const stats: RenderPatchStats = {
@@ -49,6 +53,7 @@ const stats: RenderPatchStats = {
     renderMs: { avg: 0, p50: 0, p90: 0, max: 0 },
     rowsPerFrame: 0,
     frameGapMs: { avg: 0, p50: 0, p90: 0 },
+    idleSkipped: 0, painted: 0,
 }
 
 const renderTimes: number[] = []
@@ -133,6 +138,39 @@ export function applyRenderPatch (
     ): void {
         stats.frames++
 
+        // ------------------------------------------------------------------
+        // Idle skip.
+        //
+        // ghostty-web's render loop is unconditional:
+        //
+        //     startRenderLoop() {
+        //       const A = () => { if (!disposed && open) {
+        //         this.renderer.render(...); requestAnimationFrame(A) } }
+        //
+        // and render() has no early-out - zero `return` statements in its
+        // body. So a terminal with no output still runs getCursor(),
+        // getDimensions(), getScrollbackLength(), a selection scan, a
+        // hyperlink scan and a full rows-long dirty loop on every frame.
+        // Measured on an idle Tabby tab: ~143 render() calls per second with
+        // zero bytes of output.
+        //
+        // This reproduces render()'s own repaint triggers and returns before
+        // any of that work when none of them fire. The cursor blink is
+        // deliberately allowed through (see below) - skipping it would trade
+        // the win for a frozen cursor.
+        // ------------------------------------------------------------------
+        if (enabled() && this.__gwIdleSkip !== false) {
+            try {
+                if (this.__gwCanSkip?.(buffer, forceAll, viewportY, scrollbackProvider)) {
+                    stats.idleSkipped++
+                    return
+                }
+            } catch {
+                // Never let the gate break rendering: fall through and paint.
+            }
+        }
+        stats.painted++
+
         // Only safe while pinned to the bottom: scrolled-back frames read rows
         // out of scrollback, which the viewport does not contain.
         const scrolled = !!viewportY && viewportY > 0
@@ -194,8 +232,88 @@ export function applyRenderPatch (
         return out
     }
 
+    // Decide whether a frame can be skipped entirely. Mirrors every condition
+    // render() itself uses to decide it must repaint something.
+    CanvasRenderer.prototype.__gwCanSkip = function (
+        buffer: any,
+        forceAll?: boolean,
+        viewportY?: number,
+        scrollbackProvider?: any,
+    ): boolean {
+        if (forceAll || !buffer) {
+            return false
+        }
+        // Full redraw demanded by the engine.
+        if (typeof buffer.needsFullRedraw === 'function' && buffer.needsFullRedraw()) {
+            return false
+        }
+        const dims = buffer.getDimensions?.()
+        if (!dims) {
+            return false
+        }
+        // Canvas resize forces a repaint inside render().
+        const dpr = this.devicePixelRatio ?? 1
+        if (this.canvas
+            && (this.canvas.width !== dims.cols * this.metrics.width * dpr
+                || this.canvas.height !== dims.rows * this.metrics.height * dpr)) {
+            return false
+        }
+        // Scroll position changed.
+        const vy = viewportY ?? 0
+        if (vy !== this.lastViewportY) {
+            return false
+        }
+        // While scrolled back, render() repaints every row unconditionally
+        // (`g > 0 ? !0 : ...`), so it is never safe to skip there.
+        if (vy > 0) {
+            return false
+        }
+        // Cursor moved.
+        const cur = buffer.getCursor?.()
+        if (!cur || cur.x !== this.lastCursorPosition?.x || cur.y !== this.lastCursorPosition?.y) {
+            return false
+        }
+        // Cursor blink: let a frame through whenever the blink phase flips, so
+        // the cursor keeps blinking at its own cadence instead of freezing.
+        if (this.cursorBlink) {
+            const phase = Math.floor(Date.now() / 500)
+            if (phase !== this.__gwBlinkPhase) {
+                this.__gwBlinkPhase = phase
+                return false
+            }
+        }
+        // Selection present or changed.
+        if (this.selectionManager) {
+            if (this.selectionManager.hasSelection?.()) {
+                return false
+            }
+            const dirtySel = this.selectionManager.getDirtySelectionRows?.()
+            if (dirtySel && dirtySel.size > 0) {
+                return false
+            }
+        }
+        // Hyperlink hover or link range changed.
+        if (this.hoveredHyperlinkId !== this.previousHoveredHyperlinkId) {
+            return false
+        }
+        if (this.hoveredLinkRange !== this.previousHoveredLinkRange) {
+            return false
+        }
+        // Finally: any dirty row means real content changed.
+        if (typeof buffer.isRowDirty === 'function') {
+            for (let y = 0; y < dims.rows; y++) {
+                if (buffer.isRowDirty(y)) {
+                    return false
+                }
+            }
+        } else {
+            return false
+        }
+        return true
+    }
+
     stats.applied = true
-    log?.('Patched CanvasRenderer.render (viewport fast path)')
+    log?.('Patched CanvasRenderer.render (viewport fast path + idle skip)')
 
     patchRenderLine(CanvasRenderer, lineEnabled, log)
 }
