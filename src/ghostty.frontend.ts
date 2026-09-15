@@ -250,7 +250,7 @@ export class GhosttyFrontend extends Frontend {
                 const fs = req('fs')
                 const os = req('os')
                 fs.writeFileSync(
-                    os.homedir() + '/.config/tabby/ghostty-perf.json',
+                    this.perfPath(os),
                     JSON.stringify(report, null, 2),
                 )
             } catch {
@@ -283,7 +283,7 @@ export class GhosttyFrontend extends Frontend {
                 const elapsed2 = this.wrFirstAt
                     ? ((typeof performance !== 'undefined' ? performance.now() : Date.now()) - this.wrFirstAt) / 1000
                     : 0
-                fs.writeFileSync(os.homedir() + '/.config/tabby/ghostty-perf.json', JSON.stringify({
+                fs.writeFileSync(this.perfPath(os), JSON.stringify({
                     ...st2,
                     grid: `${this.terminal?.cols}x${this.terminal?.rows}`,
                     devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : null,
@@ -470,6 +470,19 @@ export class GhosttyFrontend extends Frontend {
      * no latency the user can perceive while removing ~99% of the per-chunk
      * pipeline cost.
      */
+    /**
+     * Where to write the perf snapshot.
+     *
+     * Honour TABBY_CONFIG_DIRECTORY so an isolated test instance writes to its
+     * own directory. Two Tabby instances sharing one file produced a capture
+     * that looked like a running load test but was another process's idle
+     * terminal - the numbers were real, they just came from the wrong process.
+     */
+    private perfPath (os: any): string {
+        const dir = (globalThis as any).process?.env?.TABBY_CONFIG_DIRECTORY
+        return (dir ? dir : os.homedir() + '/.config/tabby') + '/ghostty-perf.json'
+    }
+
     private queue (data: string): void {
         this.pending.push(data)
         this.pendingBytes += data.length
