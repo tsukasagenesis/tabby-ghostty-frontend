@@ -164,16 +164,21 @@ chars 194,952 | non-ASCII 14,773 (7.6%) | Thai 14,092 | combining marks 708
 lines 682 | longest 357 chars | astral chars 0
 ```
 
-But writing that window **alone** is clean, and writing it **20 times** faults:
+Writing that window **once** is clean; writing it **twice** faults.
+
+*Correction: an earlier version of this section said the fault came after 3.9 MB
+(20 repetitions). That figure was a harness bug — the byte counter only advanced
+after each completed pass, so it reported the last clean pass rather than the
+failing write. With the counter fixed, the fault lands on pass 2.*
 
 | input | result |
 |---|---|
-| window once, 64 KB writes | ok |
-| window once, single write | ok |
-| window x20 (3.9 MB) | **FAULT — memory access out of bounds** |
+| window once | ok |
+| **window twice** | **FAULT — memory access out of bounds** |
+| each quarter of the window, x20 (5x the bytes) | ok |
 
-So there is no poison byte at a fixed offset. The fault accumulates, and the
-190 KB window reaches the threshold ~30x sooner than plain ASCII does.
+So it is not a poison byte, and it is not volume: five times the bytes drawn
+from the same window is clean, while two passes of the whole thing faults.
 
 ### Script density does not explain it either
 
@@ -212,6 +217,37 @@ Devanagari, Arabic, and 2.6M distinct clusters. The real 190 KB window faults
 after 3.9 MB. Something in the actual bytes is not captured by any statistic
 measured so far, so the next step is bisecting *inside* the window rather than
 proposing another property to test.
+
+## Minimal reproducer: 53.5 KB written twice
+
+Bisecting the prefix at two passes narrowed it to **54,830 chars (53.5 KB)** —
+clean at 51,784, faults at 54,830.
+
+A standalone reproducer is checked in at `repro-ghostty-wasm/`: serve the
+directory and open it; the page writes `repro.txt` into a 125x42 terminal twice
+and reports which pass fails. No Tabby, no plugin, no PTY.
+
+### It requires *these* bytes, in full, twice
+
+One fresh terminal per case:
+
+| input | result |
+|---|---|
+| `repro.txt` once | ok |
+| **`repro.txt` twice** | **FAULT** |
+| `repro.txt`, then the next 53.5 KB of the log | ok |
+| `repro.txt`, then the first 53.5 KB of the log | ok |
+| a different 53.5 KB slice, twice | ok |
+| `repro.txt`, then its own first half | ok |
+
+Repeating *different* content of the same size is clean, and following it with
+*different* content is clean. That shape — state built on the first pass and
+violated when the identical sequence replays — is what an upstream fix needs to
+explain.
+
+One thing deliberately not claimed: the 3 KB that flips clean to fault is 22.8%
+non-ASCII against 16.6% before it, but across only 11 lines that is a
+correlation, not a mechanism.
 
 ## Mitigation shipped
 

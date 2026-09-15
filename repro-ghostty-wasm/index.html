@@ -1,0 +1,30 @@
+<!doctype html><meta charset=utf8><title>ghostty-web WASM fault</title>
+<body style="font:14px monospace;padding:12px">
+<div id=status>loading…</div>
+<div id=h style="width:1000px;height:600px"></div>
+<script type="module">
+import { init, Terminal } from './ghostty-web.js'
+const status = document.getElementById('status')
+const run = async () => {
+  await init()
+  const text = await (await fetch('./repro.txt')).text()
+  const t = new Terminal({ cols: 125, rows: 42, fontSize: 12,
+    theme: { background: '#0f1419', foreground: '#e6e1cf' } })
+  t.open(document.getElementById('h'))
+  const CH = 65536
+  for (let pass = 1; pass <= 2; pass++) {
+    try {
+      for (let i = 0; i < text.length; i += CH) {
+        t.write(text.slice(i, Math.min(i + CH, text.length)))
+      }
+      status.textContent = `pass ${pass} of 2 completed`
+    } catch (e) {
+      status.textContent = `FAULT on pass ${pass}: ${e.message}`
+      status.style.color = '#e07a5f'
+      return
+    }
+  }
+  status.textContent = 'both passes completed with no fault'
+}
+run()
+</script>
