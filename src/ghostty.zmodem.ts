@@ -92,9 +92,15 @@ export function stripZModem (session: any, log?: (...args: any[]) => void): numb
             log?.('could not remove ZMODEM middleware:', error)
         }
     }
+    // Log unconditionally. Logging only on a non-zero removal made silence
+    // ambiguous - "never ran" and "ran, found nothing" looked identical, which
+    // cost a full round of measurement chasing a strip that was never reached.
     if (targets.length) {
         log?.(`removed ${targets.length} ZMODEM middleware entrie(s);`,
             'stack was', stats.lastStack.join(' -> '))
+    } else {
+        log?.('inspected stack, no ZMODEM middleware found:',
+            stats.lastStack.join(' -> ') || '(empty)')
     }
     return targets.length
 }

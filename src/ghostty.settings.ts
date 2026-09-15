@@ -1,6 +1,7 @@
 import { Component, Injectable } from '@angular/core'
-import { ConfigProvider, ConfigService } from 'tabby-core'
+import { AppService, ConfigProvider, ConfigService } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
+import { GhosttyBenchTabComponent } from './ghostty.bench.component'
 
 /** Default config for this plugin. */
 export class GhosttyConfigProvider extends ConfigProvider {
@@ -77,6 +78,27 @@ export class GhosttyConfigProvider extends ConfigProvider {
     template: `
         <div class="content-box">
             <h3 class="mb-3">Ghostty</h3>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Rendering benchmark</div>
+                    <div class="description">
+                        Runs four probes &mdash; a bare animation-frame loop, canvas painting,
+                        a DOM mutation and a 200-node DOM rebuild &mdash; inside Tabby's own
+                        Angular tree, and counts how many change-detection passes fire while
+                        they run.
+                        <br><br>
+                        The same probes reach ~144&nbsp;fps in plain Chromium and in Tabby's
+                        own Electron build, so a low number here points at Tabby rather than
+                        at the host. Close every terminal tab first: output streaming in
+                        another tab starves the same frame loop and would be misread as a
+                        rendering fault.
+                    </div>
+                </div>
+                <button class="btn btn-secondary" (click)="openBenchmark()">
+                    Open benchmark tab
+                </button>
+            </div>
 
             <div class="form-line">
                 <div class="header">
@@ -329,7 +351,21 @@ export class GhosttyConfigProvider extends ConfigProvider {
     `,
 })
 export class GhosttySettingsTabComponent {
-    constructor (public config: ConfigService) { }
+    constructor (
+        public config: ConfigService,
+        private app: AppService,
+    ) { }
+
+    /**
+     * Open the rendering benchmark in its own tab.
+     *
+     * `openNewTabRaw`, not `openNewTab`: the latter wraps the tab in a
+     * `SplitTabComponent`, adding a layout layer that would confound the
+     * measurement.
+     */
+    openBenchmark (): void {
+        this.app.openNewTabRaw({ type: GhosttyBenchTabComponent })
+    }
 }
 
 @Injectable()

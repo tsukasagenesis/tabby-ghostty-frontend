@@ -6,6 +6,7 @@ import TabbyTerminalModule from 'tabby-terminal'
 import { SettingsTabProvider } from 'tabby-settings'
 
 import { GhosttyTabComponent } from './ghostty.tab.component'
+import { GhosttyBenchTabComponent } from './ghostty.bench.component'
 import { GhosttyProfileProvider, GhosttyTabRecoveryProvider } from './ghostty.profile'
 import { GhosttyConfigProvider, GhosttySettingsTabComponent, GhosttySettingsTabProvider } from './ghostty.settings'
 import { GhosttyFrontendPatch } from './ghostty.patch'
@@ -36,6 +37,7 @@ import { GhosttyFrontendPatch } from './ghostty.patch'
     ],
     declarations: [
         GhosttyTabComponent,
+        GhosttyBenchTabComponent,
         GhosttySettingsTabComponent,
     ],
     providers: [

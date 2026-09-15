@@ -72,6 +72,23 @@ export class GhosttyFrontendPatch {
 
         proto.ngOnInit = function (this: any, ...args: any[]) {
             if (!patch.enabled) {
+                // `disableZmodemEverywhere` must still apply here. The strip
+                // used to live in the `finally` below, after this early return,
+                // so with the frontend patch off it never ran - the setting
+                // looked ineffective because it was never reached, not because
+                // stripping does not help.
+                if (patch.config.store?.ghostty?.disableZmodemEverywhere === true) {
+                    const stopOnly = watchAndStrip(
+                        this,
+                        () => patch.config.store?.ghostty?.disableZmodem !== false,
+                        (...a: any[]) => patch.logger.info('[zmodem]', ...a),
+                    )
+                    try {
+                        this.destroyed$?.subscribe?.(() => stopOnly())
+                    } catch {
+                        // Tab without destroyed$: the watcher self-limits anyway.
+                    }
+                }
                 return original.apply(this, args)
             }
 
