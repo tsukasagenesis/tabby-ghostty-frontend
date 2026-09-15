@@ -48,6 +48,20 @@ export class GhosttyFrontend extends Frontend {
     private wrMs = 0
     private wrMax = 0
     private wrFirstAt = 0
+    // Rate over the last reporting window. `mbPerSec` divided by all elapsed
+    // time since the first write, so a 9 MB/s burst followed by idle reported
+    // 0.4 MB/s - the metric averaged the burst away.
+    private wrLastBytes = 0
+    private wrLastAt = 0
+    // flush() cost. queue() is near-free by design, so per-chunk write timing
+    // reported 0 ms for 97 MB of output; the engine work happens here.
+    private flMs = 0
+    private flMax = 0
+    private flBytes = 0
+    /** Watchdog for flow control: rAF-delivered callbacks can stop arriving. */
+    private fcWatchdog: any = null
+    private fcStalls = 0
+    private fcBlockedAt = 0
 
     // Output coalescing. SSH delivers one russh packet per emitOutput, which
     // measured ~1.7 KB in practice: 90 MB arrived as 52,969 separate writes,
@@ -294,11 +308,34 @@ export class GhosttyFrontend extends Frontend {
                         avgMs: this.wrCount ? +(this.wrMs / this.wrCount).toFixed(3) : 0,
                         maxMs: +this.wrMax.toFixed(2),
                         mbPerSec: elapsed2 > 0 ? +((this.wrBytes / 1048576) / elapsed2).toFixed(1) : 0,
+                        // Throughput over this reporting window only.
+                        mbPerSecNow: (() => {
+                            const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+                            const dt = this.wrLastAt ? (now - this.wrLastAt) / 1000 : 0
+                            const db = this.wrBytes - this.wrLastBytes
+                            this.wrLastAt = now
+                            this.wrLastBytes = this.wrBytes
+                            return dt > 0 ? +((db / 1048576) / dt).toFixed(2) : 0
+                        })(),
                     },
                     // Coalescing health. If `pendingBytes` is non-zero and
                     // `msSinceFlush` keeps climbing across reports, the flush
                     // scheduler has stalled and output is hung - exactly the
                     // failure this telemetry exists to catch.
+                    flush: {
+                        totalMs: +this.flMs.toFixed(1),
+                        maxMs: +this.flMax.toFixed(2),
+                        mb: +(this.flBytes / 1048576).toFixed(2),
+                        avgMs: this.flushes ? +(this.flMs / this.flushes).toFixed(3) : 0,
+                        mbPerSecInFlush: this.flMs > 0 ? +((this.flBytes / 1048576) / (this.flMs / 1000)).toFixed(1) : 0,
+                    },
+                    flowControl: {
+                        enabled: this.flowControlEnabled,
+                        blocked: this.fcBlocked,
+                        pending: this.fcPending,
+                        waiters: this.fcWaiters.length,
+                        stalls: this.fcStalls,
+                    },
                     coalesce: {
                         coalesced: this.coalescedWrites,
                         flushes: this.flushes,
@@ -478,6 +515,50 @@ export class GhosttyFrontend extends Frontend {
      * that looked like a running load test but was another process's idle
      * terminal - the numbers were real, they just came from the wrong process.
      */
+    /**
+     * Release flow control if the rAF-delivered write callbacks stop arriving.
+     *
+     * ghostty-web signals "frame painted" with `B && requestAnimationFrame(B)`,
+     * so a stalled rAF leaves `fcPending` permanently high, `fcBlocked` stuck
+     * true, and every queued writer awaiting a promise that never resolves.
+     * Blocking output for good is a worse failure than briefly ignoring
+     * backpressure, so force a release rather than hang the tab.
+     */
+    private armFcWatchdog (): void {
+        if (this.fcWatchdog !== null) {
+            return
+        }
+        this.fcBlockedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        this.fcWatchdog = setInterval(() => {
+            if (!this.fcBlocked) {
+                clearInterval(this.fcWatchdog)
+                this.fcWatchdog = null
+                return
+            }
+            const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+            if (now - this.fcBlockedAt > 2000) {
+                this.fcStalls++
+                console.warn('[ghostty] flow control stalled for',
+                    Math.round(now - this.fcBlockedAt), 'ms with', this.fcPending,
+                    'writes outstanding - releasing to avoid a permanent block')
+                this.releaseFcWaiters()
+                clearInterval(this.fcWatchdog)
+                this.fcWatchdog = null
+            }
+        }, 500)
+    }
+
+    private releaseFcWaiters (): void {
+        this.fcBlocked = false
+        this.fcPending = 0
+        this.fcBytes = 0
+        const waiters = this.fcWaiters
+        this.fcWaiters = []
+        for (const resume of waiters) {
+            resume()
+        }
+    }
+
     private perfPath (os: any): string {
         const dir = (globalThis as any).process?.env?.TABBY_CONFIG_DIRECTORY
         return (dir ? dir : os.homedir() + '/.config/tabby') + '/ghostty-perf.json'
@@ -535,13 +616,18 @@ export class GhosttyFrontend extends Frontend {
         this.pending = []
         this.pendingBytes = 0
         this.flushes++
-        this.lastFlushAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        const flStart = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        this.lastFlushAt = flStart
         try {
             this.terminal?.write(batch)
             this.contentUpdated.next()
         } catch (error) {
             console.error('GhosttyFrontend.flush failed:', error)
         }
+        const flDur = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - flStart
+        this.flMs += flDur
+        this.flBytes += batch.length
+        if (flDur > this.flMax) this.flMax = flDur
     }
 
     /**
@@ -570,6 +656,7 @@ export class GhosttyFrontend extends Frontend {
         if (this.flowControlEnabled && this.fcBlocked) {
             // Park until the terminal has caught up. Tabby awaits this, which
             // is what applies backpressure to the session.
+            this.armFcWatchdog()
             await new Promise<void>(resolve => this.fcWaiters.push(resolve))
         }
 
@@ -616,6 +703,14 @@ export class GhosttyFrontend extends Frontend {
                 this.terminal.write(data)
             }
             this.contentUpdated.next()
+            // Record timing on this path too. Timing lived only in the
+            // non-flow-control branch above, so with flowControl on - the
+            // default - avgMs/maxMs reported 0 ms for 97 MB of output.
+            {
+                const d = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - wrStart
+                this.wrMs += d
+                if (d > this.wrMax) this.wrMax = d
+            }
         } catch (error) {
             // Swallow: rejecting here would poison Tabby's write lock.
             console.error('GhosttyFrontend.write failed:', error)
