@@ -2,6 +2,7 @@ import { Injector } from '@angular/core'
 import { ConfigService, PlatformService, ThemesService, getCSSFontFamily } from 'tabby-core'
 import { Frontend, BaseTerminalProfile } from 'tabby-terminal'
 import { applyRenderPatch, getRenderPatchStats } from './ghostty.renderpatch'
+import { getZModemStripStats } from './ghostty.zmodem'
 
 // `SearchOptions` / `SearchState` are declared in tabby-terminal's
 // frontends/frontend.d.ts but are not re-exported from the package root, and
@@ -62,6 +63,10 @@ export class GhosttyFrontend extends Frontend {
     private pending: string[] = []
     private pendingBytes = 0
     private flushHandle: any = null
+    private flushTimer: any = null
+    private lastFlushAt = 0
+    private stalls = 0
+    private readonly FLUSH_TIMEOUT_MS = 24
     private coalescedWrites = 0
     private flushes = 0
 
@@ -256,6 +261,20 @@ export class GhosttyFrontend extends Frontend {
         // Keep refreshing while the tab lives, so the file reflects a busy
         // period rather than the first idle five seconds.
         const perfTimer = setInterval(() => {
+            // Watchdog. Both schedulers should have fired long ago; if bytes
+            // are still pending, something swallowed them. Force progress
+            // rather than leaving the tab frozen on output.
+            if (this.pendingBytes > 0) {
+                const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+                if (this.lastFlushAt && now - this.lastFlushAt > 1000) {
+                    this.stalls++
+                    console.warn('[ghostty] flush stalled for',
+                        Math.round(now - this.lastFlushAt), 'ms with',
+                        this.pendingBytes, 'bytes pending - forcing flush')
+                    this.flush()
+                }
+            }
+
             const st2 = getRenderPatchStats()
             try {
                 const req = (globalThis as any).nodeRequire ?? require
@@ -268,12 +287,30 @@ export class GhosttyFrontend extends Frontend {
                     ...st2,
                     grid: `${this.terminal?.cols}x${this.terminal?.rows}`,
                     devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : null,
+                    zmodem: getZModemStripStats(),
                     write: {
                         chunks: this.wrCount,
                         mb: +(this.wrBytes / 1048576).toFixed(2),
                         avgMs: this.wrCount ? +(this.wrMs / this.wrCount).toFixed(3) : 0,
                         maxMs: +this.wrMax.toFixed(2),
                         mbPerSec: elapsed2 > 0 ? +((this.wrBytes / 1048576) / elapsed2).toFixed(1) : 0,
+                    },
+                    // Coalescing health. If `pendingBytes` is non-zero and
+                    // `msSinceFlush` keeps climbing across reports, the flush
+                    // scheduler has stalled and output is hung - exactly the
+                    // failure this telemetry exists to catch.
+                    coalesce: {
+                        coalesced: this.coalescedWrites,
+                        flushes: this.flushes,
+                        perFlush: this.flushes ? +(this.coalescedWrites / this.flushes).toFixed(1) : 0,
+                        pendingBytes: this.pendingBytes,
+                        pendingChunks: this.pending.length,
+                        msSinceFlush: this.lastFlushAt
+                            ? +(((typeof performance !== 'undefined' ? performance.now() : Date.now()) - this.lastFlushAt)).toFixed(0)
+                            : null,
+                        rafPending: this.flushHandle !== null,
+                        timerPending: this.flushTimer !== null,
+                        stalls: this.stalls,
                     },
                     at: new Date().toISOString(),
                 }, null, 2))
@@ -444,15 +481,40 @@ export class GhosttyFrontend extends Frontend {
             this.flush()
             return
         }
-        if (this.flushHandle === null) {
-            const raf = typeof requestAnimationFrame === 'function'
-                ? requestAnimationFrame
-                : (cb: any) => setTimeout(cb, 16)
-            this.flushHandle = raf(() => { this.flushHandle = null; this.flush() })
+
+        // Schedule a flush on the next frame, but never depend on
+        // requestAnimationFrame alone. If rAF stops firing - a backgrounded
+        // surface, a compositor stall, a starved renderer - a flush scheduled
+        // only through it would never run, `flushHandle` would stay set, and no
+        // further flush could ever be scheduled. Output would stop permanently
+        // while chunks piled up: a hung terminal, which is worse than a slow
+        // one. The timer below guarantees forward progress regardless.
+        if (this.flushHandle === null && typeof requestAnimationFrame === 'function') {
+            this.flushHandle = requestAnimationFrame(() => {
+                this.flushHandle = null
+                this.flush()
+            })
+        }
+        if (this.flushTimer === null) {
+            this.flushTimer = setTimeout(() => {
+                this.flushTimer = null
+                this.flush()
+            }, this.FLUSH_TIMEOUT_MS)
         }
     }
 
     private flush (): void {
+        // Cancel whichever scheduler did not win the race, so neither is left
+        // holding a stale handle that blocks future scheduling.
+        if (this.flushHandle !== null && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(this.flushHandle)
+        }
+        this.flushHandle = null
+        if (this.flushTimer !== null) {
+            clearTimeout(this.flushTimer)
+            this.flushTimer = null
+        }
+
         if (!this.pending.length) {
             return
         }
@@ -460,6 +522,7 @@ export class GhosttyFrontend extends Frontend {
         this.pending = []
         this.pendingBytes = 0
         this.flushes++
+        this.lastFlushAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
         try {
             this.terminal?.write(batch)
             this.contentUpdated.next()

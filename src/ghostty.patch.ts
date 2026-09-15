@@ -2,6 +2,7 @@ import { Injectable, Injector } from '@angular/core'
 import { ConfigService, LogService, Logger } from 'tabby-core'
 import { BaseTerminalTabComponent } from 'tabby-terminal'
 import { GhosttyFrontend } from './ghostty.frontend'
+import { watchAndStrip } from './ghostty.zmodem'
 
 /**
  * Replaces the terminal frontend in Tabby's own tabs with GhosttyFrontend.
@@ -109,6 +110,23 @@ export class GhosttyFrontendPatch {
                 const current = replaced ?? stored
                 delete this.frontend
                 this.frontend = current
+
+                // Only for tabs we actually render: strip Tabby's ZMODEM
+                // detection, which a CPU profile showed to be the single
+                // largest cost under load (10.2% self time, ~3x the renderer's
+                // own cell decoding).
+                if (replaced) {
+                    const stop = watchAndStrip(
+                        this,
+                        () => patch.config.store?.ghostty?.disableZmodem !== false,
+                        (...a: any[]) => patch.logger.info('[zmodem]', ...a),
+                    )
+                    try {
+                        this.destroyed$?.subscribe?.(() => stop())
+                    } catch {
+                        // Tab without destroyed$: the watcher self-limits anyway.
+                    }
+                }
             }
         }
 

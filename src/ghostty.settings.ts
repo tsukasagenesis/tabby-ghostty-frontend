@@ -35,6 +35,13 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // getViewport() call instead of one getLine() per row.
             fastRenderer: true,
 
+            // Remove Tabby's ZMODEM detection from Ghostty-rendered tabs.
+            // A CPU profile put its `consume` at 10.2% self time - the largest
+            // single cost under load - because it copies every byte of output
+            // into a boxed JS array, in 1 KB slices, to look for a transfer
+            // header. Disables rz/sz auto-detection in these tabs.
+            disableZmodem: true,
+
             // Batch session output and write it once per animation frame.
             // SSH delivers ~1.7 KB per packet; each write pays Tabby's whole
             // per-chunk pipeline, which capped throughput at 1.2 MB/s while
@@ -171,6 +178,24 @@ export class GhosttyConfigProvider extends ConfigProvider {
                 </div>
                 <toggle
                     [(ngModel)]="config.store.ghostty.fastRenderer"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Disable ZMODEM detection</div>
+                    <div class="description">
+                        Tabby scans every byte of terminal output for ZMODEM file-transfer
+                        headers, copying it into a boxed JavaScript array in 1&nbsp;KB slices.
+                        A CPU profile measured this at 10.2% of renderer time under load &mdash;
+                        about three times the cost of Ghostty's own cell decoding and four times
+                        all glyph painting. Removing it raises throughput substantially.
+                        <strong>Trade-off:</strong> <code>rz</code>/<code>sz</code> transfers are
+                        no longer auto-detected in Ghostty tabs.
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.disableZmodem"
                     (ngModelChange)="config.save()"></toggle>
             </div>
 
