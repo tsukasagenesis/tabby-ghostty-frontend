@@ -1,7 +1,9 @@
 # Tabby: ZMODEM detection is the largest single cost in the terminal pipeline
 
 **Affects:** Tabby 1.0.235, `tabby-terminal`
-**Impact:** ~10% of renderer CPU under load, in every terminal tab, whether or not ZMODEM is ever used.
+**Impact:** up to ~28% of renderer CPU under load, in every terminal tab,
+whether or not ZMODEM is ever used. The renderer's frame loop collapses from
+144 Hz idle to ~11 Hz while streaming.
 
 ## Measurement
 
@@ -39,6 +41,44 @@ for (let i = 0; i <= Math.floor(data.length / chunkSize); i++) {
 
 So every megabyte of terminal output becomes ~1M boxed array elements,
 scanned for a ZRINIT/ZRQINIT header, then discarded.
+
+## Measured again in a stock xterm tab
+
+The first measurement (10.2% self time) was taken in a tab rendered by a
+third-party frontend. Repeating it in a **stock xterm.js tab**, streaming
+`journalctl --no-pager` for 20 s:
+
+| self time | | function |
+|---|---|---|
+| 34.7% | 7,058 ms | `(program)` (native/GPU) |
+| **28.4%** | **5,773 ms** | **`consume`** (ZMODEM sentry) |
+| 3.3% | 675 ms | `restore` |
+| 3.0% | 609 ms | `drawImage` |
+| 2.6% | 533 ms | `print` (xterm parser) |
+
+`consume` costs more than xterm's own parsing, cell writes and painting
+combined. Over the same run the renderer's animation-frame loop fell from
+144 Hz while idle to **~11 Hz** under load, so the frame budget is gone
+before anything is drawn.
+
+`ZModemDecorator` is registered unconditionally
+(`{ provide: TerminalDecorator, useClass: ZModemDecorator, multi: true }`)
+and its `attach()` has no setting check, so every terminal pays this.
+
+## Isolated microbenchmark
+
+Scanning 64 MB with the sentry's own pattern - box each slice into a JS
+`Array` via `Array.prototype.slice.call(new Uint8Array(input))`, then scan:
+
+| approach | time | throughput | |
+|---|---|---|---|
+| boxed slices (what Tabby does) | 3,942 ms | 16.2 MB/s | baseline |
+| identical scan, no boxing | 55 ms | 1,162.9 MB/s | **71.6x faster** |
+| `indexOf` prefilter for `**\x18B` | 7 ms | 8,611.3 MB/s | **530x faster** |
+
+At the 5.2 MB/s that `journalctl` actually streams, the boxed path burns
+**~320 ms of CPU per second of output** - roughly a third of the main thread,
+spent looking for a file-transfer header that is not there.
 
 ## Effect on throughput
 

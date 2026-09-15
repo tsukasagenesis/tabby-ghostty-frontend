@@ -42,6 +42,12 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // header. Disables rz/sz auto-detection in these tabs.
             disableZmodem: true,
 
+            // Strip ZMODEM from EVERY terminal tab, including those this
+            // plugin does not render. Measured in a stock xterm tab streaming
+            // journalctl: `consume` 28.4% self time, and the renderer's frame
+            // loop collapsed from 144 Hz idle to ~11 Hz under load.
+            disableZmodemEverywhere: false,
+
             // Batch session output and write it once per animation frame.
             // SSH delivers ~1.7 KB per packet; each write pays Tabby's whole
             // per-chunk pipeline, which capped throughput at 1.2 MB/s while

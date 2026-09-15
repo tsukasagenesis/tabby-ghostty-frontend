@@ -115,7 +115,13 @@ export class GhosttyFrontendPatch {
                 // detection, which a CPU profile showed to be the single
                 // largest cost under load (10.2% self time, ~3x the renderer's
                 // own cell decoding).
-                if (replaced) {
+                // `disableZmodemEverywhere` also strips tabs this plugin does
+                // not render. A CPU profile of a stock xterm tab under
+                // journalctl put `consume` at 28.4% self time (5,773 ms of
+                // 20,356 ms), so the cost is Tabby-wide rather than specific
+                // to this frontend.
+                const stripAll = patch.config.store?.ghostty?.disableZmodemEverywhere === true
+                if (replaced || stripAll) {
                     const stop = watchAndStrip(
                         this,
                         () => patch.config.store?.ghostty?.disableZmodem !== false,
