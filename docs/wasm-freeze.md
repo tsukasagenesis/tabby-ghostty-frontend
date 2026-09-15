@@ -82,6 +82,49 @@ resize — none of which exist outside the app.
 The next occurrence is therefore the evidence to wait for, which is why the
 fault detection below matters more than further harness work.
 
+## Root cause located: it is a ghostty-web bug, not a plugin bug
+
+Reproduced with **no Tabby code involved at all**. Real `journalctl` output,
+captured to a file and written into a bare headless `ghostty-web` engine:
+
+```
+source 190.4 MB, streamed 111.8 MB in 3.1 s
+RESULT: FAULT at 111.8 MB -> memory access out of bounds
+```
+
+The same harness with *synthetic* log-shaped lines reached 900 MB clean. So the
+trigger is the **content** of real journal output, not volume, and not anything
+this plugin does.
+
+Two further results pin it down:
+
+- **Coalescing is not involved.** With `coalesceOutput: false` — no `queue()`,
+  no `flush()`, no slicing, `splitWrites: 0` throughout — Tabby still faulted at
+  **145.9 MB**, against 145.99 MB with slicing on. A threshold stable to within
+  0.1 MB across two completely different write paths cannot be a property of
+  either path.
+- **The slicing pattern is safe.** Replicating `flush()`'s exact behaviour
+  headlessly (520 KB batches sliced into 64 KB writes, 7,092 slices, 400 MB)
+  produced no fault.
+
+### Every hypothesis tested
+
+| hypothesis | result |
+|---|---|
+| Large single writes | refuted — 2 MB clean |
+| Sustained volume (synthetic) | refuted — 900 MB clean |
+| Malformed UTF-8 / surrogates | refuted — 7/7 clean |
+| Render patch | refuted — 1921 patched frames clean |
+| Resize during streaming | refuted — 200 resizes clean |
+| Split mid-escape-sequence | refuted — 6/6 clean (CSI, OSC, lone ESC) |
+| Scrollback size | refuted — 400 MB clean at both 25000 and 1000 |
+| `flush()` slicing | refuted — 7,092 slices clean |
+| Coalescing | refuted — faults with it off |
+| **Real journal content** | **REPRODUCES — fault at 111.8 MB, bare engine** |
+
+The fault message shipped to users previously blamed `batchOutputMs`. That was
+wrong and has been corrected: no plugin setting prevents this.
+
 ## Mitigation shipped
 
 `noteEngineFault()` recognises `out of bounds` / `Invalid code point` /

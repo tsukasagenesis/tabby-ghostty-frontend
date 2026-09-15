@@ -596,9 +596,11 @@ export class GhosttyFrontend extends Frontend {
         this.engineFaults++
         if (this.engineFaults === 1) {
             console.error(
-                '[ghostty] WASM engine fault - the terminal will stop updating. '
-                + 'If ghostty.batchOutputMs is large, lower it; large single writes '
-                + 'are the known trigger. Reopen the tab to recover.', error,
+                '[ghostty] WASM engine fault in ghostty-web - this terminal will '
+                + 'stop updating; reopen the tab to recover. This is an engine bug, '
+                + 'not a settings problem: it reproduces in a bare ghostty-web '
+                + 'instance with no Tabby code involved, and no plugin setting '
+                + 'prevents it.', error,
             )
         }
         // After a heap fault the engine only produces garbage, so stop feeding
