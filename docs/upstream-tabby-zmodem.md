@@ -30,17 +30,21 @@ consume(input) {
   }
 ```
 
-and `ZModemDecorator` feeds it in 1 KB slices:
+*Correction: an earlier draft of this report said `ZModemDecorator` feeds
+`consume()` in 1 KB slices. That is not what this build does, and I could not
+find any such chunking in it.* `ZModemMiddleware.feedFromSession` passes each
+session chunk straight through:
 
 ```js
-const chunkSize = 1024
-for (let i = 0; i <= Math.floor(data.length / chunkSize); i++) {
-  this.sentry.consume(Buffer.from(data.slice(...)))
+feedFromSession(data) {
+  if (this.isActive || this.activeSession) { this.sentry.consume(data) }
+  else { this.sentry.consume(data) }        // routes back via to_terminal
 }
 ```
 
-So every megabyte of terminal output becomes ~1M boxed array elements,
-scanned for a ZRINIT/ZRQINIT header, then discarded.
+The cost is the boxing inside `consume()` itself: every chunk of terminal
+output is copied into a plain JS `Array`, one element per byte, scanned for a
+ZRINIT/ZRQINIT header, then discarded.
 
 ## Measured again in a stock xterm tab
 
@@ -72,9 +76,9 @@ Scanning 64 MB with the sentry's own pattern - box each slice into a JS
 
 | approach | time | throughput | |
 |---|---|---|---|
-| boxed slices (what Tabby does) | 3,942 ms | 16.2 MB/s | baseline |
+| boxed array per chunk (what Tabby does) | 3,942 ms | 16.2 MB/s | baseline |
 | identical scan, no boxing | 55 ms | 1,162.9 MB/s | **71.6x faster** |
-| `indexOf` prefilter for `**\x18B` | 7 ms | 8,611.3 MB/s | **530x faster** |
+| `indexOf` prefilter for the ZDLE header | 7 ms | 8,611.3 MB/s | **530x faster** |
 
 At the 5.2 MB/s that `journalctl` actually streams, the boxed path burns
 **~320 ms of CPU per second of output** - roughly a third of the main thread,
