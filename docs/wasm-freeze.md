@@ -185,14 +185,33 @@ Synthetic streams of a single repeated sequence, 300 MB each, fresh engine:
 | Thai (one repeated cluster) | clean to 300 MB |
 | Devanagari (one repeated cluster) | clean to 300 MB |
 
-Repetition of *one* complex cluster is harmless. The real window has 682
-distinct lines and hundreds of distinct clusters, which is the remaining
-difference and the next thing under test: an engine cache keyed per unique
-grapheme cluster would grow with *distinct* clusters rather than with bytes.
+Repetition of *one* complex cluster is harmless.
 
-(An Arabic run in that same sweep failed with "Failed to create terminal", but
-it ran after three prior 300 MB runs in one page, so that is being re-tested in
-isolation before any claim is made about it.)
+### Cluster variety does not explain it either
+
+The obvious follow-up was that an engine cache keyed per unique grapheme
+cluster would grow with *distinct* clusters rather than with bytes. Tested with
+a fresh browser per arm:
+
+| content | distinct clusters | result |
+|---|---|---|
+| one cluster, repeated | 0 new | clean to 300 MB |
+| a new base+mark cluster per line | **2,599,974** | clean to 300 MB |
+
+2.6 million distinct Thai base+mark clusters, 300 MB, no fault. So variety is
+not the mechanism.
+
+The Arabic run that had failed with "Failed to create terminal" was re-tested
+first in a fresh page: **clean to 300 MB**. That failure was accumulated page
+state from three prior 300 MB runs, not anything about Arabic — retracted.
+
+### Where that leaves it
+
+Every synthetic construction survives 300 MB: ASCII, repeated Thai, repeated
+Devanagari, Arabic, and 2.6M distinct clusters. The real 190 KB window faults
+after 3.9 MB. Something in the actual bytes is not captured by any statistic
+measured so far, so the next step is bisecting *inside* the window rather than
+proposing another property to test.
 
 ## Mitigation shipped
 
