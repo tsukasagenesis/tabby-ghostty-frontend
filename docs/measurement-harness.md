@@ -98,6 +98,28 @@ ceiling next to every number.
 `scratchpad/fpslib.mjs` holds the fixed version: it cancels any existing handle
 before arming, and cancels again when read.
 
+## Prove the thing under test is actually happening
+
+Four "load tests" in this project measured an idle terminal, and one comparison
+nearly shipped with an arm that had no evidence of load at all. A frame-rate
+number means nothing without a signal that the workload was running while it was
+taken.
+
+Pick the signal to match what the code under test actually does:
+
+- **Canvas terminals** (both xterm and ghostty-web here): hook the 2D context
+  methods — and hook *all* of them. A glyph texture atlas blits with
+  `drawImage`, so a counter watching only `fillRect` reads ~146 ops while the
+  terminal is genuinely drawing ~200,000. That near-zero reading looked like
+  proof the stream had died.
+- **DOM renderers**: a `MutationObserver` on the rows container. Note that zero
+  mutations on a *canvas* terminal is the expected result, not a finding.
+- **Throughput**: assert a byte counter advanced between samples.
+
+State the ceiling next to every number, and label each row with whether its
+liveness check passed. An unlabelled row invites exactly the mistake of treating
+an idle measurement as a result.
+
 ## Never match processes with a self-matching pattern
 
 `pgrep -f tabby`, `pkill -f tabby/app.asar` and `pgrep -f "seq 1 900000"` all
