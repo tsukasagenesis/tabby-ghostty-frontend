@@ -65,6 +65,39 @@ Synthetic typing is not the problem: `$(...)`, parentheses, `${}` and pipes
 all survive per-character `Input.dispatchKeyEvent`. That was verified with a
 probe command, after being wrongly blamed twice.
 
+## Never install a second rAF loop without cancelling the first
+
+A sampler that does this:
+
+```js
+window.__n = 0
+const tick = () => { window.__n++; requestAnimationFrame(tick) }
+requestAnimationFrame(tick)
+```
+
+leaks a loop on every call. Sample it repeatedly in one page and the counts
+add up, because none of the earlier loops ever stopped. That produced this
+sequence of "measurements" on a 143.87 Hz display:
+
+```
+slice 1: 116.0 fps
+slice 2: 275.0 fps
+slice 3: 393.0 fps
+slice 4: 558.0 fps
+slice 5: 682.5 fps
+slice 6: 777.0 fps
+```
+
+and a "terminal canvas hidden: 280.5 fps" result that briefly looked like a
+major finding about compositing. All of it was the same bug.
+
+The sanity check is free and catches it instantly: **a reading above the
+monitor's refresh rate is not a result, it is a broken instrument.** Print the
+ceiling next to every number.
+
+`scratchpad/fpslib.mjs` holds the fixed version: it cancels any existing handle
+before arming, and cancels again when read.
+
 ## Never match processes with a self-matching pattern
 
 `pgrep -f tabby`, `pkill -f tabby/app.asar` and `pgrep -f "seq 1 900000"` all
