@@ -152,6 +152,48 @@ pinning down precisely.
 The fault message shipped to users previously blamed `batchOutputMs`. That was
 wrong and has been corrected: no plugin setting prevents this.
 
+## The trigger is cumulative, not a poison byte
+
+Bisecting the capture with the reproduction's exact write loop narrowed the
+faulting prefix to a 190 KB window (clean at 111.738 MB, faults at 111.924 MB).
+That window looked like a smoking gun — it is dense Thai text inside dolphin
+file-copy paths, matching the corrupted-glyph screenshot exactly:
+
+```
+chars 194,952 | non-ASCII 14,773 (7.6%) | Thai 14,092 | combining marks 708
+lines 682 | longest 357 chars | astral chars 0
+```
+
+But writing that window **alone** is clean, and writing it **20 times** faults:
+
+| input | result |
+|---|---|
+| window once, 64 KB writes | ok |
+| window once, single write | ok |
+| window x20 (3.9 MB) | **FAULT — memory access out of bounds** |
+
+So there is no poison byte at a fixed offset. The fault accumulates, and the
+190 KB window reaches the threshold ~30x sooner than plain ASCII does.
+
+### Script density does not explain it either
+
+Synthetic streams of a single repeated sequence, 300 MB each, fresh engine:
+
+| content | result |
+|---|---|
+| ASCII only | clean to 300 MB |
+| Thai (one repeated cluster) | clean to 300 MB |
+| Devanagari (one repeated cluster) | clean to 300 MB |
+
+Repetition of *one* complex cluster is harmless. The real window has 682
+distinct lines and hundreds of distinct clusters, which is the remaining
+difference and the next thing under test: an engine cache keyed per unique
+grapheme cluster would grow with *distinct* clusters rather than with bytes.
+
+(An Arabic run in that same sweep failed with "Failed to create terminal", but
+it ran after three prior 300 MB runs in one page, so that is being re-tested in
+isolation before any claim is made about it.)
+
 ## Mitigation shipped
 
 `noteEngineFault()` recognises `out of bounds` / `Invalid code point` /
