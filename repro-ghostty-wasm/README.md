@@ -20,6 +20,45 @@ After this the engine is unusable: every later `write()` throws, and
 (`RangeError: Invalid code point 1924376` = `0x1D5A18`), painting stray colour
 blocks where text should be.
 
+## Where it faults
+
+The throw comes from inside the engine, on the call that grows the WASM heap:
+
+```
+RuntimeError: memory access out of bounds
+  at wasm://wasm/…:wasm-function[162]:0xf837
+  at wasm://wasm/…:wasm-function[234]:0x1a5ca
+  at wasm://wasm/…:wasm-function[281]:0x1ff1b
+  at wasm://wasm/…:wasm-function[292]:0x2101a
+  at wasm://wasm/…:wasm-function[446]:0x330d8
+  at ghostty_terminal_write
+  at K.write (ghostty-web.js)
+```
+
+Heap size around the fault, sampled per write:
+
+```
+pass 1, offset 0   7.25 ->  9.38 MB   (ghostty_terminal_write grew it)
+pass 2, offset 0   9.38 -> 11.38 MB   <<< FAULT during this growth
+```
+
+The memory is declared `min=19 pages (1.2 MB), max=UNLIMITED`, so this is not
+exhaustion — an OOM would fail `memory.grow`, not throw an out-of-bounds
+access. The fault happens *while* the engine is growing its own heap inside
+`ghostty_terminal_write`.
+
+`ghostty-vt.wasm` carries no name section, so the Zig symbol behind
+`wasm-function[162]` cannot be recovered from the shipped binary; a build with
+symbols would name it immediately.
+
+### One thing ruled out on the JS side
+
+`getGrapheme`/`getScrollbackGrapheme` cache a `Uint32Array` over
+`memory.buffer` and never refresh it, so that view **is** detached by a heap
+grow — a genuine latent bug. It is *not* this crash: after forcing a grow the
+cached view reads `byteLength === 0`, yet the next `getGrapheme()` call still
+returns correctly, because the function rebuilds its result from a fresh view.
+
 ## It is specific to replaying the same bytes
 
 Same engine, same sizes, one fresh terminal per case:
