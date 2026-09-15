@@ -75,33 +75,38 @@ Same engine, same sizes, one fresh terminal per case:
 So it is neither volume nor repetition in general: it needs *these* bytes,
 *in full*, *twice*.
 
-## A second, separate bug: `scrollback` never reaches the engine
+## Already-filed upstream issues this overlaps
 
-`ITerminalOptions` accepts `scrollback`, but the WASM config struct reads a
-differently-named field:
+Searching the tracker after the fact, most of what I found is already reported:
 
-```js
-i.setUint32(w, C.scrollbackLimit ?? 1e4, !0)   // config written into wasm
-```
+- **#141 — "WASM memory corruption after freeing terminal that processed
+  multi-codepoint grapheme clusters"** is very likely this same defect, better
+  isolated. Their trigger is `terminal.free()` after writing a multi-codepoint
+  cluster; mine is a second write of the same content. Both end in
+  `ghostty_terminal_write` with an out-of-bounds access, and this reproducer's
+  text is Thai with 708 combining marks — multi-codepoint clusters throughout.
+- **#140 — "scrollbackLimit is documented as lines but interpreted as bytes by
+  WASM"**. *This corrects an earlier claim in this file.* I wrote that
+  `options.scrollback` is never bridged to `scrollbackLimit`. That was wrong —
+  it is bridged. The real defect is the unit: WASM reads the value as **bytes**,
+  so the 10,000 default is a handful of rows, which is why every setting above 0
+  retained ~564 lines in the table below.
+- **#139 — "getViewport() returns corrupted data when viewport spans multiple
+  pages"**, made more frequent by #140's undersized buffer.
+- **#189 — "A single throw inside render() permanently stops the render loop"**
+  is the failure the `stopEngineLoop` mitigation in this plugin works around.
 
-Nothing bridges `options.scrollback` to `config.scrollbackLimit`, so the engine
-always runs on the 10,000 default. Measured by running the reproducer at six
-settings and reading `getScrollbackLength()` afterwards:
+### Measured scrollback behaviour
 
-| `scrollback` passed | scrollback lines retained | result |
+The reproducer faults on pass 2 at every setting, at the same 11.38 MB heap:
+
+| `scrollback` passed | lines retained | result |
 |---|---|---|
 | 0 | 942 | FAULT pass 2 |
-| 100 | 564 | FAULT pass 2 |
-| 1000 | 564 | FAULT pass 2 |
-| 10000 | 564 | FAULT pass 2 |
-| 25000 | 564 | FAULT pass 2 |
-| 100000 | 564 | FAULT pass 2 |
+| 100 / 1000 / 10000 / 25000 / 100000 | 564 each | FAULT pass 2 |
 
-Every value above 0 retains exactly the same 564 lines, so the option is inert.
-
-This is worth fixing on its own, but it is **not** the cause of the crash: the
-fault occurs identically at every setting, at the same 11.38 MB heap size. A
-missing eviction bound would make the fault depend on the bound; it does not.
+The bound does not change the fault, so eviction is not the cause — but the
+flat 564 is #140's byte/line confusion, not an unbridged option.
 
 ## Not explained by any of these
 
