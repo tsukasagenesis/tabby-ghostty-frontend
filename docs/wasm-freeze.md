@@ -120,7 +120,34 @@ Two further results pin it down:
 | Scrollback size | refuted — 400 MB clean at both 25000 and 1000 |
 | `flush()` slicing | refuted — 7,092 slices clean |
 | Coalescing | refuted — faults with it off |
-| **Real journal content** | **REPRODUCES — fault at 111.8 MB, bare engine** |
+| **Real journal content** | **REPRODUCES — fault at 111.8 MB, bare engine, 3/3 runs identical** |
+
+### The reproduction is exactly deterministic
+
+Three consecutive runs of the same harness:
+
+```
+run 1: streamed 111.8 MB in 2.9 s -> FAULT at 111.8 MB
+run 2: streamed 111.8 MB in 3.0 s -> FAULT at 111.8 MB
+run 3: streamed 111.8 MB in 3.0 s -> FAULT at 111.8 MB
+```
+
+Identical to the decimal, so this is a specific offset in the capture rather
+than accumulated state or nondeterminism.
+
+**One contradiction is unresolved and recorded rather than hidden:** a bisect
+harness that wrote the 0–130 MB prefix ran *clean*. It differed from the
+reproduction by creating a fresh engine per probe and calling `dispose()`, and
+by bounding each write to the probe's end offset instead of the full text
+length. Until that is explained, the exact triggering condition is not fully
+characterised — a deterministic offset and a clean superset-prefix cannot both
+be the whole story.
+
+Note also that the content itself looks unremarkable: scanning the first 60 MB
+found the longest line at 807 bytes, 515 non-ASCII bytes, **zero** NUL bytes,
+**zero** other control bytes and **zero** ESC sequences. It is essentially plain
+ASCII, which is what makes "real content is special" hard to explain and worth
+pinning down precisely.
 
 The fault message shipped to users previously blamed `batchOutputMs`. That was
 wrong and has been corrected: no plugin setting prevents this.
