@@ -605,6 +605,40 @@ export class GhosttyFrontend extends Frontend {
         // it rather than looping on throws forever.
         if (this.engineFaults >= 3) {
             this.engineDead = true
+            this.stopEngineLoop()
+        }
+    }
+
+    /**
+     * Halt ghostty-web's render loop after a fatal engine fault.
+     *
+     * Its loop is unconditional:
+     *
+     *     startRenderLoop() {
+     *       const A = () => { if (!this.isDisposed && this.isOpen) {
+     *         this.renderer.render(this.wasmTerm, ...)
+     *         this.animationFrameId = requestAnimationFrame(A) } }
+     *
+     * so a corrupted engine is re-entered every frame forever. In the field
+     * that pinned the renderer's main thread at 101% CPU - wedged badly enough
+     * that CDP's own `Runtime.enable` timed out, which is far worse than a
+     * merely frozen tab. Clearing `isOpen` and cancelling the pending frame is
+     * what `dispose()` does, without tearing down the object others still hold.
+     */
+    private stopEngineLoop (): void {
+        const t: any = this.terminal
+        if (!t) {
+            return
+        }
+        try {
+            t.isOpen = false
+            if (t.animationFrameId) {
+                cancelAnimationFrame(t.animationFrameId)
+                t.animationFrameId = undefined
+            }
+            console.error('[ghostty] engine render loop halted after repeated faults; reopen the tab')
+        } catch (error) {
+            console.error('[ghostty] could not halt the engine render loop:', error)
         }
     }
 
@@ -620,7 +654,11 @@ export class GhosttyFrontend extends Frontend {
 
         // Bound the buffer: a burst should not grow without limit between
         // frames. 4 MB is far above a single frame's worth of PTY output.
-        if (this.pendingBytes >= 4 * 1024 * 1024) {
+        // Flush on a byte threshold, not only on the time window. A 100 ms
+        // window under journalctl accumulated batches an order of magnitude
+        // larger than MAX_ENGINE_WRITE, so every flush was then sliced ~10
+        // times. Bounding here keeps each flush a single engine write.
+        if (this.pendingBytes >= this.MAX_ENGINE_WRITE) {
             this.flush()
             return
         }

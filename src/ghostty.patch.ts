@@ -153,7 +153,16 @@ export class GhosttyFrontendPatch {
                 // tab behaves normally for the rest of its life.
                 const current = replaced ?? stored
                 delete this.frontend
-                this.frontend = current
+                if (current) {
+                    this.frontend = current
+                } else {
+                    // Neither a replacement nor Tabby's own value ever arrived,
+                    // so the setter was never called. Writing `undefined` here
+                    // makes Tabby's own getters throw 'Frontend not ready' on
+                    // every later access; leaving the property absent lets its
+                    // normal initialisation path run instead.
+                    patch.logger.warn('frontend was never assigned during ngOnInit; leaving it unset')
+                }
 
                 // Only for tabs we actually render: strip Tabby's ZMODEM
                 // detection, which a CPU profile showed to be the single

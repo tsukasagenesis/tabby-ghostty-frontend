@@ -51,6 +51,7 @@ export interface RenderPatchStats {
         noViewportFn: number
         threw: number
         shortViewport: number
+        resizedMidFrame: number
         lastShort: string
     }
     /** frames that actually painted */
@@ -63,7 +64,7 @@ const stats: RenderPatchStats = {
     rowsPerFrame: 0,
     frameGapMs: { avg: 0, p50: 0, p90: 0 },
     idleSkipped: 0, painted: 0,
-    bail: { disabled: 0, scrolled: 0, noViewportFn: 0, threw: 0, shortViewport: 0, lastShort: '' },
+    bail: { disabled: 0, scrolled: 0, noViewportFn: 0, threw: 0, shortViewport: 0, resizedMidFrame: 0, lastShort: '' },
 }
 
 const renderTimes: number[] = []
@@ -220,6 +221,14 @@ export function applyRenderPatch (
         const wrapped = {
             getLine (y: number): any[] | null {
                 if (y < 0 || y >= rows) {
+                    return buffer.getLine(y)
+                }
+                // Re-check the grid before slicing. A resize mid-render frees
+                // and reallocates the engine's pooled cell array, so slices
+                // taken from the captured `flat` would read a stale buffer.
+                const live = buffer.getDimensions?.()
+                if (!live || live.cols !== cols || live.rows !== rows) {
+                    stats.bail.resizedMidFrame++
                     return buffer.getLine(y)
                 }
                 let row = rowCache[y]
