@@ -3,6 +3,7 @@ import { ConfigService, LogService, Logger } from 'tabby-core'
 import { BaseTerminalTabComponent } from 'tabby-terminal'
 import { GhosttyFrontend } from './ghostty.frontend'
 import { watchAndStrip } from './ghostty.zmodem'
+import { applyOutputBatching, neuterDebugDecorator } from './ghostty.pipelinepatch'
 import { BUILD_STAMP } from './ghostty.buildstamp'
 
 /**
@@ -73,6 +74,16 @@ export class GhosttyFrontendPatch {
 
         proto.ngOnInit = function (this: any, ...args: any[]) {
             if (!patch.enabled) {
+                if (patch.config.store?.ghostty?.skipDebugDecorator === true) {
+                    try {
+                        neuterDebugDecorator(
+                            this.decorators ?? [],
+                            (...a: any[]) => patch.logger.info('[pipeline]', ...a),
+                        )
+                    } catch (error) {
+                        patch.logger.warn('could not neuter DebugDecorator:', error)
+                    }
+                }
                 // `disableZmodemEverywhere` must still apply here. The strip
                 // used to live in the `finally` below, after this early return,
                 // so with the frontend patch off it never ran - the setting
@@ -91,6 +102,21 @@ export class GhosttyFrontendPatch {
                     }
                 }
                 return original.apply(this, args)
+            }
+
+            // Neuter DebugDecorator before the original runs: it attaches from
+            // `enabledServices(this.decorators).forEach(d => d.attach(this))`
+            // inside ngOnInit, so replacing attach() afterwards would be too
+            // late - the per-chunk subscription would already exist.
+            if (patch.config.store?.ghostty?.skipDebugDecorator === true) {
+                try {
+                    neuterDebugDecorator(
+                        this.decorators ?? [],
+                        (...a: any[]) => patch.logger.info('[pipeline]', ...a),
+                    )
+                } catch (error) {
+                    patch.logger.warn('could not neuter DebugDecorator:', error)
+                }
             }
 
             let replaced: GhosttyFrontend | null = null
@@ -156,6 +182,15 @@ export class GhosttyFrontendPatch {
 
         this.applied = true
         this.logger.info('Patched BaseTerminalTabComponent.ngOnInit; build', BUILD_STAMP)
+
+        // Pipeline mitigations, independent of the frontend swap. Both default
+        // off; each is measured separately. See ghostty.pipelinepatch.ts for
+        // what they remove and why normal output does not need it.
+        applyOutputBatching(
+            () => Number(this.config.store?.ghostty?.batchOutputMs ?? 10),
+            () => this.config.store?.ghostty?.batchOutput === true,
+            (...a: any[]) => this.logger.info('[pipeline]', ...a),
+        )
 
         // ConfigService populates `store` asynchronously: its constructor does
         // `setTimeout(() => this.init())` and `init()` awaits `load()`, which is

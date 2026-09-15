@@ -49,6 +49,17 @@ export class GhosttyConfigProvider extends ConfigProvider {
             // loop collapsed from 144 Hz idle to ~11 Hz under load.
             disableZmodemEverywhere: false,
 
+            // Stop DebugDecorator buffering every chunk of output. It keeps an
+            // 8 KB rolling buffer via string concat + substring per chunk, and
+            // feeds only the debug-save-output / debug-copy-output hotkeys.
+            skipDebugDecorator: false,
+
+            // Batch output$ instead of writing the terminal once per chunk.
+            // Restores the bufferTime(10) upstream commented out directly above
+            // their own subscription.
+            batchOutput: false,
+            batchOutputMs: 10,
+
             // Batch session output and write it once per animation frame.
             // SSH delivers ~1.7 KB per packet; each write pays Tabby's whole
             // per-chunk pipeline, which capped throughput at 1.2 MB/s while
@@ -78,6 +89,39 @@ export class GhosttyConfigProvider extends ConfigProvider {
     template: `
         <div class="content-box">
             <h3 class="mb-3">Ghostty</h3>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Batch terminal output</div>
+                    <div class="description">
+                        Tabby writes the terminal once per chunk of session output, with no
+                        coalescing anywhere between the PTY and the renderer. Upstream's own
+                        <code>bufferTime(10)</code> sits commented out directly above the
+                        subscription. This restores it.
+                        <br><br>
+                        Takes effect on newly opened tabs.
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.batchOutput"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
+
+            <div class="form-line">
+                <div class="header">
+                    <div class="title">Skip debug output buffer</div>
+                    <div class="description">
+                        Tabby's <code>DebugDecorator</code> appends every chunk to an 8&nbsp;KB
+                        rolling string buffer &mdash; a concat plus a <code>substring</code>
+                        rope-flatten per chunk &mdash; in every terminal tab, unconditionally.
+                        The buffer feeds only the <em>debug-save-output</em> and
+                        <em>debug-copy-output</em> hotkeys, which stop working while this is on.
+                    </div>
+                </div>
+                <toggle
+                    [(ngModel)]="config.store.ghostty.skipDebugDecorator"
+                    (ngModelChange)="config.save()"></toggle>
+            </div>
 
             <div class="form-line">
                 <div class="header">

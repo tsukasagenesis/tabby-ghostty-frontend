@@ -80,6 +80,7 @@ interface ProbeResult {
 
             <canvas #cv width="800" height="400"></canvas>
             <div #dom class="domtarget"></div>
+            <div #gh class="ghosttyhost"></div>
         </div>
     `,
     styles: [`
@@ -96,11 +97,13 @@ interface ProbeResult {
         .note { opacity: .7; max-width: 60em; margin-bottom: 12px; line-height: 1.5; }
         canvas { display: block; border: 1px solid rgba(128,128,128,.3); }
         .domtarget { height: 300px; overflow: hidden; }
+        .ghosttyhost { width: 800px; height: 300px; overflow: hidden; }
     `],
 })
 export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit, OnDestroy {
     @ViewChild('cv') cv: ElementRef
     @ViewChild('dom') dom: ElementRef
+    @ViewChild('gh') gh: ElementRef
 
     @HostBinding('class.ghostty-bench-tab') hostClass = true
 
@@ -114,6 +117,7 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
     private tickCount = 0
     private tickMs = 0
     private restoreTick: (() => void) | null = null
+    private engine: any = null
 
     constructor (
         injector: Injector,
@@ -233,6 +237,21 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
             }],
         ]
 
+        // E: drive a real ghostty-web engine directly, with no Tabby session,
+        // no middleware stack and no PTY. If the engine sustains full refresh
+        // here while a Ghostty *tab* caps at ~43 fps under streaming, the cap
+        // is the pipeline feeding it rather than the renderer.
+        const engine = await this.makeEngine()
+        if (engine) {
+            probes.push(['E ghostty engine direct', (n: number) => {
+                let out = ''
+                for (let r = 0; r < 40; r++) {
+                    out += `row ${r} frame ${n} ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n`
+                }
+                engine.write(out)
+            }])
+        }
+
         for (const [name, work] of probes) {
             if (this.disposed) {
                 return
@@ -251,6 +270,36 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
             this.running = false
             this.status = 'done — run again with a terminal streaming to compare'
         })
+    }
+
+    /**
+     * Build a standalone ghostty-web terminal in this tab.
+     *
+     * Mirrors what GhosttyTabComponent does (`init()` then `new Terminal(...)`
+     * then `open(host)`), but is fed synthetic writes rather than a session, so
+     * nothing of Tabby's output pipeline is in the path.
+     */
+    private async makeEngine (): Promise<any | null> {
+        if (this.engine) {
+            return this.engine
+        }
+        try {
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const gw = require('ghostty-web')
+            await gw.init()
+            const term = new gw.Terminal({
+                cols: 120,
+                rows: 30,
+                fontSize: 12,
+                theme: { background: '#0f1419', foreground: '#e6e1cf' },
+            })
+            term.open(this.gh.nativeElement)
+            this.engine = term
+            return term
+        } catch (error) {
+            console.warn('[ghostty-bench] could not start engine:', error)
+            return null
+        }
     }
 
     ngOnDestroy (): void {
@@ -273,6 +322,12 @@ export class GhosttyBenchTabComponent extends BaseTabComponent implements OnInit
             // Non-fatal: the patch is idempotent and guarded by a flag.
         }
         this.restoreTick = null
+        try {
+            this.engine?.dispose?.()
+        } catch {
+            // Engine already gone; nothing to release.
+        }
+        this.engine = null
         super.destroy(skipDestroyedEvent)
     }
 }
