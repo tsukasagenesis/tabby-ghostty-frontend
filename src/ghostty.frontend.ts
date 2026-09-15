@@ -78,6 +78,20 @@ export class GhosttyFrontend extends Frontend {
     private pendingBytes = 0
     private flushHandle: any = null
     private flushTimer: any = null
+    private engineFaults = 0
+    private engineDead = false
+    private splitWrites = 0
+    /**
+     * Largest single write handed to the WASM engine.
+     *
+     * ghostty-web allocates a WASM buffer per write() with no size ceiling of
+     * its own. A ~528 KB single write - produced by a 100 ms batching window -
+     * triggered `RuntimeError: memory access out of bounds`, which corrupts the
+     * engine heap permanently: every later write throws and the tab freezes
+     * showing a garbled frame. 64 KB is comfortably above a normal PTY read and
+     * far below where the fault was observed.
+     */
+    private readonly MAX_ENGINE_WRITE = 64 * 1024
     private lastFlushAt = 0
     private stalls = 0
     private readonly FLUSH_TIMEOUT_MS = 24
@@ -348,6 +362,9 @@ export class GhosttyFrontend extends Frontend {
                         rafPending: this.flushHandle !== null,
                         timerPending: this.flushTimer !== null,
                         stalls: this.stalls,
+                        splitWrites: this.splitWrites,
+                        engineFaults: this.engineFaults,
+                        engineDead: this.engineDead,
                     },
                     at: new Date().toISOString(),
                 }, null, 2))
@@ -559,6 +576,38 @@ export class GhosttyFrontend extends Frontend {
         }
     }
 
+    /**
+     * A WASM fault is not recoverable and must not be swallowed silently.
+     *
+     * `RuntimeError: memory access out of bounds` from ghostty-web corrupts the
+     * engine heap: every later write throws, the renderer keeps running, and the
+     * tab sits frozen showing a garbled last frame (stray colour blocks where
+     * text should be) with no indication anything is wrong. Observed in the
+     * field with 100 ms output batching, which produces ~500 KB single writes
+     * against the few-KB writes every other configuration makes.
+     *
+     * Count the faults, shout once, and stop re-entering a dead engine.
+     */
+    private noteEngineFault (error: any): void {
+        const msg = String(error?.message ?? error)
+        if (!/out of bounds|Invalid code point|unreachable/i.test(msg)) {
+            return
+        }
+        this.engineFaults++
+        if (this.engineFaults === 1) {
+            console.error(
+                '[ghostty] WASM engine fault - the terminal will stop updating. '
+                + 'If ghostty.batchOutputMs is large, lower it; large single writes '
+                + 'are the known trigger. Reopen the tab to recover.', error,
+            )
+        }
+        // After a heap fault the engine only produces garbage, so stop feeding
+        // it rather than looping on throws forever.
+        if (this.engineFaults >= 3) {
+            this.engineDead = true
+        }
+    }
+
     private perfPath (os: any): string {
         const dir = (globalThis as any).process?.env?.TABBY_CONFIG_DIRECTORY
         return (dir ? dir : os.homedir() + '/.config/tabby') + '/ghostty-perf.json'
@@ -619,10 +668,30 @@ export class GhosttyFrontend extends Frontend {
         const flStart = typeof performance !== 'undefined' ? performance.now() : Date.now()
         this.lastFlushAt = flStart
         try {
-            this.terminal?.write(batch)
+            // Never hand the engine an unbounded single write. See MAX_ENGINE_WRITE.
+            if (batch.length <= this.MAX_ENGINE_WRITE) {
+                this.terminal?.write(batch)
+            } else {
+                let i = 0
+                while (i < batch.length) {
+                    let end = Math.min(i + this.MAX_ENGINE_WRITE, batch.length)
+                    // Never cut between the halves of a surrogate pair: a lone
+                    // surrogate reaches the engine as an invalid code point.
+                    if (end < batch.length) {
+                        const code = batch.charCodeAt(end - 1)
+                        if (code >= 0xD800 && code <= 0xDBFF) {
+                            end--
+                        }
+                    }
+                    this.terminal?.write(batch.slice(i, end))
+                    this.splitWrites++
+                    i = end
+                }
+            }
             this.contentUpdated.next()
         } catch (error) {
             console.error('GhosttyFrontend.flush failed:', error)
+            this.noteEngineFault(error)
         }
         const flDur = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - flStart
         this.flMs += flDur
@@ -645,6 +714,9 @@ export class GhosttyFrontend extends Frontend {
      * arriving in that window is buffered here and replayed by `attach()`.
      */
     async write (data: string): Promise<void> {
+        if (this.engineDead) {
+            return
+        }
         if (!this.terminal || !this.opened) {
             if (this.writeBufferBytes < this.writeBufferLimit) {
                 this.writeBuffer.push(data)
@@ -714,11 +786,17 @@ export class GhosttyFrontend extends Frontend {
         } catch (error) {
             // Swallow: rejecting here would poison Tabby's write lock.
             console.error('GhosttyFrontend.write failed:', error)
+            this.noteEngineFault(error)
         }
     }
 
     private get flowControlEnabled (): boolean {
-        return this.configService.store?.ghostty?.flowControl !== false
+        // `=== true`, not `!== false`. Tabby's settings UI DELETES a key when a
+        // toggle is turned off rather than writing `false`, so `!== false`
+        // silently kept flow control enabled after the user disabled it - the
+        // toggle appeared to do nothing. The declared default is false, so
+        // absent must mean off.
+        return this.configService.store?.ghostty?.flowControl === true
     }
 
     clear (): void {

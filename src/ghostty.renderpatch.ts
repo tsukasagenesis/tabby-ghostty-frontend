@@ -44,6 +44,15 @@ export interface RenderPatchStats {
     frameGapMs: { avg: number, p50: number, p90: number }
     /** frames skipped because nothing visibly changed */
     idleSkipped: number
+    /** why the viewport fast path bailed - 95% bail rate seen in the field */
+    bail: {
+        disabled: number
+        scrolled: number
+        noViewportFn: number
+        threw: number
+        shortViewport: number
+        lastShort: string
+    }
     /** frames that actually painted */
     painted: number
 }
@@ -54,6 +63,7 @@ const stats: RenderPatchStats = {
     rowsPerFrame: 0,
     frameGapMs: { avg: 0, p50: 0, p90: 0 },
     idleSkipped: 0, painted: 0,
+    bail: { disabled: 0, scrolled: 0, noViewportFn: 0, threw: 0, shortViewport: 0, lastShort: '' },
 }
 
 const renderTimes: number[] = []
@@ -175,6 +185,13 @@ export function applyRenderPatch (
         // out of scrollback, which the viewport does not contain.
         const scrolled = !!viewportY && viewportY > 0
         if (!enabled() || scrolled || !buffer || typeof buffer.getViewport !== 'function') {
+            if (!enabled()) {
+                stats.bail.disabled++
+            } else if (scrolled) {
+                stats.bail.scrolled++
+            } else {
+                stats.bail.noViewportFn++
+            }
             return original.call(this, buffer, forceAll, viewportY, scrollbackProvider, scrollbarOpacity)
         }
 
@@ -184,12 +201,17 @@ export function applyRenderPatch (
             dims = buffer.getDimensions()
             flat = buffer.getViewport()
         } catch {
+            stats.bail.threw++
             return original.call(this, buffer, forceAll, viewportY, scrollbackProvider, scrollbarOpacity)
         }
 
         const cols = dims?.cols | 0
         const rows = dims?.rows | 0
         if (!cols || !rows || !flat || flat.length < cols * rows) {
+            stats.bail.shortViewport++
+            // Record the shape once so a size-dependent mismatch is diagnosable
+            // without attaching a debugger.
+            stats.bail.lastShort = `${flat ? flat.length : 'null'} cells for ${cols}x${rows}=${cols * rows}`
             return original.call(this, buffer, forceAll, viewportY, scrollbackProvider, scrollbarOpacity)
         }
 
