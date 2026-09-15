@@ -18,10 +18,28 @@ Measured on a 128x68 grid:
 page from 17 fps to 78 fps (the latter with `--disable-frame-rate-limit`;
 60 fps is the vsync ceiling).
 
-## 2. `scrollbackLimit` is ignored
+## 2. Render cost grows as scrollback fills (under investigation)
 
-The option is accepted but never applied — scrollback grows without bound,
-so long-running sessions keep accumulating memory.
+*Correction: an earlier draft of this report claimed `scrollbackLimit` was
+ignored. That was wrong. It is passed into the WASM config
+(`setUint32(w, C.scrollbackLimit ?? 1e4)`) and the buffer lives in WASM
+linear memory, not JS — which is why a JS-side search for eviction found
+nothing. The limit is honoured.*
+
+The open question is different: per-frame render cost degrades badly as the
+scrollback buffer fills. Streaming into a 128x68 grid with
+`scrollback: 25000`, measured over 60 s:
+
+| elapsed | frame gap p90 | render p90 |
+|---|---|---|
+| 0-20 s | 7.2 ms | 0.2 ms |
+| 40 s | 30.6 ms | 0.4 ms |
+| 60 s | 98.3 ms | 10.4 ms |
+
+A monotonic 50x degradation in render time that never recovers, while the
+viewport stays pinned at the bottom and the visible row count never changes.
+Repainting 68 rows should cost the same whether there are 200 or 25,000 lines
+of history behind them.
 
 ## 3. `isDefaultBg` treats true black as "default"
 
