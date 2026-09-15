@@ -43,18 +43,44 @@ The size hypothesis was the original reason for the 64 KB write cap. Since it is
 refuted, that cap is **defensive hardening, not a fix** — it should not be
 described as one.
 
-## Still open
+## Hypothesis 4, also refuted: the render patch
 
-The one configuration that has not been meaningfully exercised is the render
-patch itself: `render()` wrapped so `getLine()` is served from a single
-`getViewport()` slice rather than one `getLine()` per row. A first attempt
-streamed 400 MB through it without fault, but reported `fast 2 / bail 0` —
-`render()` ran only twice, because the write loop yielded to rAF once every
-32 MB. That run proves nothing about the patch.
+The render patch wraps `render()` so `getLine()` is served from a single
+`getViewport()` slice instead of one `getLine()` per row. Because the symptom is
+a render-side read of corrupted cells, and this is the only thing in the user's
+session reading cells differently from stock, it was the last suspect.
 
-This matters because the symptom is a **render-side read** of corrupted cells,
-and the render patch is the only thing in the user's session reading cells
-differently from stock.
+A first attempt looked clean but proved nothing: 400 MB streamed without fault,
+yet it logged `fast 2 / bail 0` — `render()` ran only twice, because the write
+loop yielded to rAF once every 32 MB.
+
+Re-run yielding on **every** iteration so the render loop actually runs:
+
+```
+streamed  : 120.1 MB in 34.3 s   (Thai/CJK journalctl-shaped lines)
+frames    : fast 1921 / bail 0
+renderErrs: none
+RESULT    : no fault
+```
+
+1921 patched render calls against a live engine, no fault.
+
+## All four hypotheses refuted — what that means
+
+| hypothesis | verdict |
+|---|---|
+| Large single writes | refuted (2 MB clean) |
+| Sustained volume | refuted (900 MB clean) |
+| Malformed UTF-8 | refuted (7/7 clean) |
+| Render patch | refuted (1921 frames clean) |
+
+There is no remaining theory. Every mechanism reproducible in headless Chromium
+behaves correctly, which points at what the harness *cannot* reproduce: the real
+PTY path, Electron's IPC transport, node-pty chunk boundaries, and terminal
+resize — none of which exist outside the app.
+
+The next occurrence is therefore the evidence to wait for, which is why the
+fault detection below matters more than further harness work.
 
 ## Mitigation shipped
 
