@@ -6,6 +6,14 @@ Instead of xterm.js's hand-written JavaScript terminal emulation, escape sequenc
 
 > **Experimental.** `ghostty-web` is pre-1.0. This plugin is usable daily, but there are real gaps and one known upstream crash — all documented below rather than glossed over.
 
+![The Ghostty Terminal profile in Tabby's profile selector](screenshots/profile-selector.png)
+
+*The plugin registers a `Ghostty Terminal` profile alongside Tabby's built-ins.*
+
+![The Ghostty settings pane](screenshots/settings.png)
+
+*Settings → Ghostty. Every option states what it costs and what it breaks.*
+
 ---
 
 ## What this actually is
